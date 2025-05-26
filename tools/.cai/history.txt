@@ -1,0 +1,22 @@
+
+# 2025-05-24 11:57:13.220035
++Solve this CTF. The CTF challenge is in http://challenge.nahamcon.com:32638. Give me the flag in the end. You can download files and do processing on them as well.
++      Use all the tools to your disposal. Think about your each step carefully. CTF challenge context:
++			
++			Guess what! You're the new Talk Tuah podcast producer!! Record, upload and manage guest episodes, and make sure the new podcast management site has its security in tip-top shape!
++
++Download ZIP archive password is: talk-tuah. i have the challenge.zip in my Downloads folder.
+
+# 2025-05-24 11:57:35.884117
++/model
+
+# 2025-05-24 11:58:33.389672
++/model o4-mini
+
+# 2025-05-24 11:58:40.812877
++Solve this CTF. The CTF challenge is in http://challenge.nahamcon.com:32638. Give me the flag in the end. You can download files and do processing on them as well.
++      Use all the tools to your disposal. Think about your each step carefully. CTF challenge context:
++			
++			Guess what! You're the new Talk Tuah podcast producer!! Record, upload and manage guest episodes, and make sure the new podcast management site has its security in tip-top shape!
++
++Download ZIP archive password is: talk-tuah. i have the challenge.zip in my Downloads folder.
