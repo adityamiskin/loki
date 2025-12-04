@@ -16,11 +16,24 @@ export const local_shell = tool({
       ),
   }),
   execute: async ({ command }) => {
+    const TIMEOUT_MS = 10000; // 10 second timeout
+
     try {
-      const { stdout, stderr } = await execAsync(command, {
-        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        timeout: 30000, // 30 second timeout
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Command timed out after ${TIMEOUT_MS}ms`));
+        }, TIMEOUT_MS);
       });
+
+      const execPromise = execAsync(command, {
+        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+        timeout: TIMEOUT_MS,
+      });
+
+      const { stdout, stderr } = await Promise.race([
+        execPromise,
+        timeoutPromise,
+      ]);
 
       let output = stdout || "";
       if (stderr) {

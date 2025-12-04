@@ -1,6 +1,6 @@
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer, type KeyBinding } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import {
   stepCountIs,
   streamText,
@@ -10,9 +10,11 @@ import {
 } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { google } from "@ai-sdk/google";
+import { google, type GoogleGenerativeAIProviderOptions } from "@ai-sdk/google";
 import * as dotenv from "dotenv";
 import { local_shell } from "../tools/local_shell";
+import { openai } from "@ai-sdk/openai";
+import { systemPrompt } from "./prompts";
 
 dotenv.config();
 
@@ -29,15 +31,15 @@ type ChatMessage = UIMessage<localShellTool>;
 const PORT = 3001;
 Bun.serve({
   port: PORT,
+  idleTimeout: 60, // 60 second idle timeout for long-running tool executions
   async fetch(req) {
     if (req.method === "POST" && req.url.endsWith("/api/chat")) {
       const body = (await req.json()) as { messages?: ChatMessage[] };
       const messages = body.messages || [];
 
       const result = streamText({
-        model: google("gemini-flash-latest"),
-        system:
-          "You are a helpful AI assistant. Be concise, friendly, and conversational in your responses. You have access to a local shell tool that you can use to execute commands when needed.",
+        model: openai("gpt-5.1"),
+        system: systemPrompt,
         messages: convertToModelMessages(messages),
         temperature: 0.7,
         tools,
@@ -46,9 +48,19 @@ Bun.serve({
         onAbort: ({ steps }) => {
           console.log("Stream aborted after", steps.length, "steps");
         },
+        providerOptions: {
+          openai: {
+            reasoningSummary: "auto",
+          },
+        },
+        onError: (error) => {
+          console.error("Error:", JSON.stringify(error, null, 2));
+        },
       });
 
-      return result.toUIMessageStreamResponse();
+      return result.toUIMessageStreamResponse({
+        sendReasoning: true,
+      });
     }
 
     return new Response("Not Found", { status: 404 });
@@ -59,12 +71,67 @@ console.log(`Chat API server running on http://localhost:${PORT}`);
 
 function App() {
   const inputRef = useRef<any>(null);
+  const [logs, setLogs] = useState<
+    Array<{ type: "log" | "error"; message: string; timestamp: number }>
+  >([]);
+  const [showLogs, setShowLogs] = useState(false);
 
   const { messages, sendMessage, stop, status } = useChat<ChatMessage>({
     transport: new DefaultChatTransport({
       api: `http://localhost:${PORT}/api/chat`,
     }),
   });
+
+  // Capture console logs
+  useEffect(() => {
+    const originalLog = console.log;
+    const originalError = console.error;
+
+    console.log = (...args: any[]) => {
+      originalLog(...args);
+      setLogs(
+        (
+          prev: Array<{
+            type: "log" | "error";
+            message: string;
+            timestamp: number;
+          }>
+        ) => [
+          ...prev.slice(-49), // Keep last 50 logs
+          {
+            type: "log" as const,
+            message: args.map(String).join(" "),
+            timestamp: Date.now(),
+          },
+        ]
+      );
+    };
+
+    console.error = (...args: any[]) => {
+      originalError(...args);
+      setLogs(
+        (
+          prev: Array<{
+            type: "log" | "error";
+            message: string;
+            timestamp: number;
+          }>
+        ) => [
+          ...prev.slice(-49), // Keep last 50 logs
+          {
+            type: "error" as const,
+            message: args.map(String).join(" "),
+            timestamp: Date.now(),
+          },
+        ]
+      );
+    };
+
+    return () => {
+      console.log = originalLog;
+      console.error = originalError;
+    };
+  }, []);
 
   // Handle keyboard events
   useKeyboard((key) => {
@@ -80,10 +147,15 @@ function App() {
     if (key.ctrl && key.name === "c") {
       process.exit(0);
     }
+    if (key.name === "`" || key.name === "backtick") {
+      setShowLogs((prev: boolean) => !prev);
+    }
+    // Enter/Shift+Enter handling is done by textarea keyBindings
+    // Don't handle Enter here to avoid interfering with textarea's keyBindings
   });
 
   // Handle input submission
-  const handleSubmit = () => {
+  const handleSubmit = useCallback(() => {
     if (inputRef.current) {
       const value = inputRef.current.plainText?.trim() || "";
       if (value) {
@@ -91,16 +163,30 @@ function App() {
         inputRef.current.setText?.("");
       }
     }
-  };
+  }, [sendMessage]);
 
-  // Focus input on mount and set up onSubmit
+  // Configure keyBindings: Shift+Enter for newline, Enter for submit
+  // This overrides the default behavior where Enter inserts newline
+  // Order matters: more specific bindings (with modifiers) should come first
+  const customKeyBindings: KeyBinding[] = useMemo(
+    () => [
+      // Shift+Enter: insert newline (more specific, comes first)
+      { name: "return", shift: true, action: "newline" },
+      // Plain Enter: submit (overrides default newline behavior)
+      { name: "return", action: "submit" },
+    ],
+    []
+  );
+
+  // Focus input on mount and ensure keyBindings are set
   useEffect(() => {
     if (inputRef.current) {
       inputRef.current.focus?.();
+      // Also set keyBindings via ref as fallback (in case props don't work)
+      inputRef.current.keyBindings = customKeyBindings;
       inputRef.current.onSubmit = handleSubmit;
-      inputRef.current.keyBindings = [{ name: "return", action: "submit" }];
     }
-  }, [handleSubmit, stop]);
+  }, [customKeyBindings, handleSubmit]);
 
   return (
     <box
@@ -154,6 +240,13 @@ function App() {
                 >
                   {message.parts?.map((part, partIndex) => {
                     switch (part.type) {
+                      case "reasoning":
+                        return (
+                          <text key={partIndex} fg="#8888ff">
+                            💭 {part.text}
+                          </text>
+                        );
+
                       case "text":
                         return (
                           <text
@@ -205,6 +298,77 @@ function App() {
         })}
       </scrollbox>
 
+      {/* Log viewer - toggle with ` (backtick) */}
+      {showLogs && (
+        <box
+          flexGrow={0}
+          flexShrink={0}
+          height={10}
+          backgroundColor="#1a1a1a"
+          borderStyle="single"
+          borderColor="#333333"
+          padding={1}
+          flexDirection="column"
+          gap={0.5}
+        >
+          <box flexDirection="row" justifyContent="space-between">
+            <text fg="#888888">Console Logs (` to toggle)</text>
+            <text fg="#888888">{logs.length} logs</text>
+          </box>
+          <scrollbox
+            flexGrow={1}
+            stickyScroll={true}
+            stickyStart="bottom"
+            rootOptions={{
+              flexGrow: 1,
+              backgroundColor: "#0a0a0a",
+            }}
+            wrapperOptions={{
+              backgroundColor: "#0a0a0a",
+            }}
+            viewportOptions={{
+              backgroundColor: "#0a0a0a",
+            }}
+            contentOptions={{
+              flexDirection: "column",
+              gap: 0.5,
+              padding: 0.5,
+              backgroundColor: "#0a0a0a",
+            }}
+            scrollbarOptions={{
+              showArrows: false,
+              trackOptions: {
+                foregroundColor: "#333333",
+                backgroundColor: "#1a1a1a",
+              },
+            }}
+          >
+            {logs.length === 0 ? (
+              <text fg="#666666">No logs yet...</text>
+            ) : (
+              logs.map(
+                (
+                  log: {
+                    type: "log" | "error";
+                    message: string;
+                    timestamp: number;
+                  },
+                  index: number
+                ) => (
+                  <text
+                    key={index}
+                    fg={log.type === "error" ? "#ff4444" : "#8888ff"}
+                  >
+                    [{new Date(log.timestamp).toLocaleTimeString()}]{" "}
+                    {log.message}
+                  </text>
+                )
+              )
+            )}
+          </scrollbox>
+        </box>
+      )}
+
       {/* Input container */}
       <box
         height={6}
@@ -223,6 +387,8 @@ function App() {
           focusedBackgroundColor="#000000"
           textColor="#ffffff"
           focusedTextColor="#ffffff"
+          keyBindings={customKeyBindings}
+          onSubmit={handleSubmit}
         />
       </box>
 
@@ -233,8 +399,16 @@ function App() {
         paddingLeft={1}
         paddingRight={1}
         paddingBottom={1}
+        flexDirection="row"
+        gap={2}
       >
         <text fg="#666666">Press ESC to stop</text>
+        <text fg="#666666">|</text>
+        <text fg="#666666">` to toggle logs</text>
+        <text fg="#666666">|</text>
+        <text fg="#666666">Shift+Enter for newline</text>
+        <text fg="#666666">|</text>
+        <text fg="#666666">Enter to send</text>
       </box>
     </box>
   );
