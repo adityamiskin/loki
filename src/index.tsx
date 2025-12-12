@@ -12,20 +12,26 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { google, type GoogleGenerativeAIProviderOptions } from "@ai-sdk/google";
 import * as dotenv from "dotenv";
-import { local_shell } from "../tools/local_shell";
+import { local_shell } from "../tools/local-shell";
 import { openai } from "@ai-sdk/openai";
 import { systemPrompt } from "./prompts";
+import { webSearch } from "../tools/web-search";
+import { subAgent } from "../tools/sub-agent";
 
 dotenv.config();
 
 // Define custom shell tool
 const tools = {
   local_shell,
+  webSearch,
+  subAgent,
 };
 
-type localShellTool = InferUITool<typeof tools.local_shell>;
+type WebSearchTool = InferUITool<typeof tools.webSearch>;
+type LocalShellTool = InferUITool<typeof tools.local_shell>;
+type SubAgentTool = InferUITool<typeof tools.subAgent>;
 
-type ChatMessage = UIMessage<localShellTool>;
+type ChatMessage = UIMessage<WebSearchTool | LocalShellTool | SubAgentTool>;
 
 // Start local HTTP server for chat API
 const PORT = 3001;
@@ -284,6 +290,63 @@ function App() {
                             return (
                               <text key={callId} fg="#ff4444">
                                 [local_shell] Error: {part.errorText}
+                              </text>
+                            );
+                        }
+                        break;
+                      }
+                      case "tool-subAgent": {
+                        const callId = part.toolCallId;
+                        const input = part.input as {
+                          objective?: string;
+                        };
+                        const output = part.output as
+                          | {
+                              result?: string;
+                              toolCalls?: number;
+                              completed?: boolean;
+                            }
+                          | undefined;
+                        switch (part.state) {
+                          case "input-streaming":
+                            return (
+                              <text key={callId} fg="#888888">
+                                Spawning sub-agent...
+                              </text>
+                            );
+                          case "input-available":
+                            return (
+                              <text key={callId} fg="#00ccff">
+                                [subAgent] Objective:{" "}
+                                {input?.objective || "(none)"}
+                              </text>
+                            );
+                          case "output-available":
+                            const toolCalls = output?.toolCalls || 0;
+                            const completed = output?.completed !== false;
+                            return (
+                              <box
+                                key={callId}
+                                flexDirection="column"
+                                gap={0.5}
+                              >
+                                <text fg="#00ccff">
+                                  [subAgent] {completed ? "✓" : "✗"} Completed
+                                  objective: {input?.objective || "(none)"}
+                                </text>
+                                {toolCalls > 0 && (
+                                  <text fg="#888888">
+                                    Used {toolCalls} tool
+                                    {toolCalls !== 1 ? "s" : ""} during
+                                    execution
+                                  </text>
+                                )}
+                              </box>
+                            );
+                          case "output-error":
+                            return (
+                              <text key={callId} fg="#ff4444">
+                                [subAgent] Error: {part.errorText}
                               </text>
                             );
                         }
