@@ -1,4 +1,9 @@
-import { createCliRenderer, type KeyBinding } from "@opentui/core";
+import {
+  createCliRenderer,
+  RGBA,
+  SyntaxStyle,
+  type KeyBinding,
+} from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import {
@@ -91,6 +96,25 @@ function App() {
 
   const spinnerFrames = useMemo(
     () => ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+    []
+  );
+  const markdownSyntaxStyle = useMemo(
+    () =>
+      SyntaxStyle.fromStyles({
+        keyword: { fg: RGBA.fromHex("#8be9fd") },
+        string: { fg: RGBA.fromHex("#f1fa8c") },
+        comment: { fg: RGBA.fromHex("#6272a4"), italic: true },
+        number: { fg: RGBA.fromHex("#bd93f9") },
+        default: { fg: RGBA.fromHex("#e0e0e0") },
+      }),
+    []
+  );
+  const subAgentTheme = useMemo(
+    () => ({
+      background: "#171717", // Muted backdrop for sub-agent blocks
+      completedBackground: "#141414", // Background for completed sub-agent blocks
+      text: "#999999", // Muted text color for sub-agent messages
+    }),
     []
   );
   const isLoading = status === "submitted" || status === "streaming";
@@ -251,6 +275,12 @@ function App() {
       >
         {messages.map((message) => {
           const isUser = message.role === "user";
+          const hasSubAgent = message.parts?.some(
+            (part) => part.type === "tool-subAgent"
+          );
+          const hasText = message.parts?.some((part) => part.type === "text");
+          // Only apply sub-agent background if message has sub-agent parts but no text parts
+          const isSubAgentOnly = hasSubAgent && !hasText;
           return (
             <box key={message.id} flexDirection="column" width="100%">
               <box flexDirection="row" width="100%">
@@ -258,12 +288,25 @@ function App() {
                 {isUser && <box width={0.5} backgroundColor="#1d64ff" />}
                 <box
                   flexGrow={1}
-                  backgroundColor={isUser ? "#1a1a1a" : "#0a0a0a"}
+                  backgroundColor={
+                    isUser
+                      ? "#1a1a1a"
+                      : isSubAgentOnly
+                      ? subAgentTheme.background
+                      : "#0a0a0a"
+                  }
                   padding={1}
                   flexDirection="column"
                   gap={0.5}
                 >
                   {message.parts?.map((part, partIndex) => {
+                    // Check if there are sub-agent parts before this text part
+                    const hasSubAgentBefore =
+                      !isUser &&
+                      part.type === "text" &&
+                      message.parts
+                        ?.slice(0, partIndex)
+                        .some((p) => p.type === "tool-subAgent");
                     switch (part.type) {
                       case "reasoning":
                         return (
@@ -273,11 +316,27 @@ function App() {
                         );
 
                       case "text":
+                        // Render assistant text as Markdown using OpenTUI's code renderer.
+                        if (!isUser) {
+                          return (
+                            <box
+                              key={partIndex}
+                              marginTop={hasSubAgentBefore ? 0.5 : 0}
+                              width="100%"
+                            >
+                              <code
+                                content={part.text || ""}
+                                streaming={true}
+                                filetype="markdown"
+                                conceal={true}
+                                syntaxStyle={markdownSyntaxStyle}
+                                width="100%"
+                              />
+                            </box>
+                          );
+                        }
                         return (
-                          <text
-                            key={partIndex}
-                            fg={isUser ? "#ffffff" : "#e0e0e0"}
-                          >
+                          <text key={partIndex} fg="#ffffff">
                             {part.text}
                           </text>
                         );
@@ -329,42 +388,55 @@ function App() {
                         switch (part.state) {
                           case "input-streaming":
                             return (
-                              <text key={callId} fg="#888888">
-                                Spawning sub-agent...
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ffd700" flexShrink={0}>
+                                  [subAgent]
+                                </text>
+                                <text fg={subAgentTheme.text} flexGrow={1}>
+                                  Spawning sub-agent...
+                                </text>
+                              </box>
                             );
                           case "input-available":
                             return (
-                              <text key={callId} fg="#00ccff">
-                                [subAgent] Objective:{" "}
-                                {input?.objective || "(none)"}
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ffd700" flexShrink={0}>
+                                  [subAgent]
+                                </text>
+                                <text fg={subAgentTheme.text} flexGrow={1}>
+                                  {input?.objective || "(none)"}
+                                </text>
+                              </box>
                             );
                           case "output-available":
                             const toolCalls = output?.toolCalls || 0;
-                            const completed = output?.completed !== false;
                             return (
                               <box
                                 key={callId}
                                 flexDirection="column"
-                                gap={0.5}
+                                gap={0.25}
                               >
-                                <text fg="#00ccff">
-                                  [subAgent] {completed ? "✓" : "✗"} Completed
-                                  objective: {input?.objective || "(none)"}
-                                </text>
-                                {toolCalls > 0 && (
-                                  <text fg="#888888">
-                                    Used {toolCalls} tool
-                                    {toolCalls !== 1 ? "s" : ""} during
-                                    execution
+                                <box flexDirection="row" gap={1}>
+                                  <text fg="#00ff88" flexShrink={0}>
+                                    [subAgent]
                                   </text>
-                                )}
+                                  <box flexDirection="column" gap={0.25}>
+                                    <text fg={subAgentTheme.text} flexGrow={1}>
+                                      {input?.objective || "(none)"}
+                                    </text>
+                                    {toolCalls > 0 && (
+                                      <text fg={subAgentTheme.text}>
+                                        {toolCalls} tool
+                                        {toolCalls !== 1 ? "s" : ""} used
+                                      </text>
+                                    )}
+                                  </box>
+                                </box>
                               </box>
                             );
                           case "output-error":
                             return (
-                              <text key={callId} fg="#ff4444">
+                              <text key={callId} fg={subAgentTheme.text}>
                                 [subAgent] Error: {part.errorText}
                               </text>
                             );
@@ -482,24 +554,25 @@ function App() {
         paddingRight={1}
         paddingBottom={1}
         flexDirection="row"
-        gap={2}
+        gap={1}
+        justifyContent="space-between"
       >
-        {isLoading ? (
-          <text fg="#00ccff">
-            {spinnerFrames[spinnerIndex % spinnerFrames.length]} Agent
-            working...
-          </text>
-        ) : (
-          <text fg="#666666">Agent idle</text>
-        )}
-        <text fg="#666666">|</text>
-        <text fg="#666666">Press ESC to stop</text>
-        <text fg="#666666">|</text>
-        <text fg="#666666">` to toggle logs</text>
-        <text fg="#666666">|</text>
-        <text fg="#666666">Shift+Enter for newline</text>
-        <text fg="#666666">|</text>
-        <text fg="#666666">Enter to send</text>
+        <box flexDirection="row" gap={1}>
+          {isLoading && (
+            <>
+              <text fg="#00ccff">
+                {spinnerFrames[spinnerIndex % spinnerFrames.length]}
+              </text>
+              <text fg="#666666">|</text>
+              <text fg="#00ccff">esc</text>
+              <text fg="#666666">interrupt</text>
+            </>
+          )}
+        </box>
+        <box flexDirection="row" gap={1}>
+          <text fg="#00ccff">`</text>
+          <text fg="#666666">logs</text>
+        </box>
       </box>
     </box>
   );
