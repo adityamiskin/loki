@@ -81,12 +81,31 @@ function App() {
     Array<{ type: "log" | "error"; message: string; timestamp: number }>
   >([]);
   const [showLogs, setShowLogs] = useState(false);
+  const [spinnerIndex, setSpinnerIndex] = useState(0);
 
   const { messages, sendMessage, stop, status } = useChat<ChatMessage>({
     transport: new DefaultChatTransport({
       api: `http://localhost:${PORT}/api/chat`,
     }),
   });
+
+  const spinnerFrames = useMemo(
+    () => ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+    []
+  );
+  const isLoading = status === "submitted" || status === "streaming";
+
+  // Animate a simple spinner while the agent is working
+  useEffect(() => {
+    if (!isLoading) {
+      setSpinnerIndex(0);
+      return;
+    }
+    const id = setInterval(() => {
+      setSpinnerIndex((prev) => (prev + 1) % spinnerFrames.length);
+    }, 90);
+    return () => clearInterval(id);
+  }, [isLoading, spinnerFrames.length]);
 
   // Capture console logs
   useEffect(() => {
@@ -465,6 +484,15 @@ function App() {
         flexDirection="row"
         gap={2}
       >
+        {isLoading ? (
+          <text fg="#00ccff">
+            {spinnerFrames[spinnerIndex % spinnerFrames.length]} Agent
+            working...
+          </text>
+        ) : (
+          <text fg="#666666">Agent idle</text>
+        )}
+        <text fg="#666666">|</text>
         <text fg="#666666">Press ESC to stop</text>
         <text fg="#666666">|</text>
         <text fg="#666666">` to toggle logs</text>
