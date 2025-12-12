@@ -8,6 +8,7 @@ import {
   type UIMessage,
   type InferUITool,
 } from "ai";
+import { start, resumeHook } from "workflow/api";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { google, type GoogleGenerativeAIProviderOptions } from "@ai-sdk/google";
@@ -17,6 +18,7 @@ import { openai } from "@ai-sdk/openai";
 import { systemPrompt } from "./prompts";
 import { webSearch } from "../tools/web-search";
 import { subAgent } from "../tools/sub-agent";
+import { mainAgentWorkflow } from "../workflows/mainAgent";
 
 dotenv.config();
 
@@ -39,7 +41,9 @@ Bun.serve({
   port: PORT,
   idleTimeout: 60, // 60 second idle timeout for long-running tool executions
   async fetch(req) {
-    if (req.method === "POST" && req.url.endsWith("/api/chat")) {
+    const url = new URL(req.url);
+
+    if (req.method === "POST" && url.pathname === "/api/chat") {
       const body = (await req.json()) as { messages?: ChatMessage[] };
       const messages = body.messages || [];
 
@@ -67,6 +71,55 @@ Bun.serve({
       return result.toUIMessageStreamResponse({
         sendReasoning: true,
       });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/main-agent") {
+      try {
+        const body = (await req.json()) as {
+          objective?: string;
+          subtasks?: string[];
+          timeoutSeconds?: number;
+        };
+
+        if (!body.objective) {
+          return Response.json({ error: "objective is required" }, { status: 400 });
+        }
+
+        const run = await start(mainAgentWorkflow, {
+          objective: body.objective,
+          subtasks: body.subtasks,
+          timeoutSeconds: body.timeoutSeconds,
+        });
+
+        const runId = (run as any)?.id ?? (run as any)?.runId ?? run;
+        return Response.json({ ok: true, runId });
+      } catch (error: any) {
+        console.error("Failed to start main agent workflow", error);
+        return Response.json(
+          { error: "Failed to start main agent workflow", detail: error?.message },
+          { status: 500 }
+        );
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/subagent-callback") {
+      const token = url.searchParams.get("token");
+      if (!token) {
+        return Response.json({ error: "Missing token" }, { status: 400 });
+      }
+
+      try {
+        const payload = await req.json();
+        const result = await resumeHook(token, payload);
+        const runId = (result as any)?.runId ?? result;
+        return Response.json({ ok: true, runId });
+      } catch (error: any) {
+        console.error("Failed to resume hook", error);
+        return Response.json(
+          { error: "Hook not found or resume failed", detail: error?.message },
+          { status: 404 }
+        );
+      }
     }
 
     return new Response("Not Found", { status: 404 });
