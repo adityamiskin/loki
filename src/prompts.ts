@@ -1,4 +1,4 @@
-import type { SkillSummary } from "./skills";
+import type { SkillDefinition } from "./skills";
 import { formatSkillsSection } from "./skills";
 
 export const baseSystemPrompt = `You are a world-class security analyst and software engineer. Your job: find bugs, logic flaws, and security issues, and propose clear, actionable fixes. Be concise, skeptical, and precise.
@@ -27,9 +27,10 @@ OUTPUT:
 - If blocked, state the blocker and the next step you would take.
 `;
 
-export function buildSystemPrompt(skills: SkillSummary[]): string {
+export function buildSystemPrompt(skills: SkillDefinition[]): string {
   const trimmed = baseSystemPrompt.trim();
-  const section = formatSkillsSection(skills);
+  const skillSummaries = skills.map(({ body, ...rest }) => rest);
+  const section = formatSkillsSection(skillSummaries);
   if (!section) {
     return trimmed;
   }
@@ -59,9 +60,10 @@ OUTPUT REQUIREMENTS:
 ERROR HANDLING:
 - If a command fails, try one alternative; then continue or summarize with what you have.`;
 
-export function buildSubAgentSystemPrompt(skills: SkillSummary[]): string {
+export function buildSubAgentSystemPrompt(skills: SkillDefinition[]): string {
   const trimmed = baseSubAgentSystemPrompt.trim();
-  const section = formatSkillsSection(skills);
+  const skillSummaries = skills.map(({ body, ...rest }) => rest);
+  const section = formatSkillsSection(skillSummaries);
   if (!section) {
     return trimmed;
   }

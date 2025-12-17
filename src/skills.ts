@@ -54,37 +54,16 @@ function parseFrontMatter(
   return parsed;
 }
 
-function loadSkillFile(filePath: string): SkillDefinition {
-  const text = readFileSync(filePath, "utf8");
-  const match = text.match(FRONT_MATTER_BOUNDARY);
-  if (!match || !match[1]) {
-    throw new Error("Missing YAML front matter");
-  }
-  const metadata = parseFrontMatter(match[1]);
-  const name = sanitizeLine(metadata.name);
-  const description = sanitizeLine(metadata.description);
-  if (!name) {
-    throw new Error("`name` is required");
-  }
-  if (!description) {
-    throw new Error("`description` is required");
-  }
-  if (name.length > NAME_LIMIT) {
-    throw new Error(`name longer than ${NAME_LIMIT} characters`);
-  }
-  if (description.length > DESCRIPTION_LIMIT) {
-    throw new Error(`description longer than ${DESCRIPTION_LIMIT} characters`);
-  }
-  const body = text.slice(match[0].length).trim();
-  return {
-    name,
-    description,
-    filePath,
-    body,
-  };
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
-function gatherSkills(
+function discoverSkills(
   directory: string,
   collected: SkillDefinition[],
   errors: string[]
@@ -98,7 +77,7 @@ function gatherSkills(
     }
     const resolved = resolve(directory, entry.name);
     if (entry.isDirectory()) {
-      gatherSkills(resolved, collected, errors);
+      discoverSkills(resolved, collected, errors);
       continue;
     }
     if (!entry.isFile() || entry.name !== "SKILL.md") {
@@ -134,7 +113,7 @@ export function loadSkills(): SkillDefinition[] {
   }
   const collected: SkillDefinition[] = [];
   const errors: string[] = [];
-  gatherSkills(SKILLS_DIR, collected, errors);
+  discoverSkills(SKILLS_DIR, collected, errors);
   if (errors.length) {
     console.warn(
       `Skill loader ignored ${errors.length} file(s); check SKILL.md contents.`
@@ -144,6 +123,49 @@ export function loadSkills(): SkillDefinition[] {
     }
   }
   return sortSkills(collected);
+}
+
+export function findSkill(name: string): SkillDefinition | null {
+  const skills = loadSkills();
+  const normalized = name.toLowerCase().trim();
+
+  for (const skill of skills) {
+    if (skill.name.toLowerCase() === normalized) {
+      return skill;
+    }
+  }
+
+  return null;
+}
+
+function loadSkillFile(filePath: string): SkillDefinition {
+  const text = readFileSync(filePath, "utf8");
+  const match = text.match(FRONT_MATTER_BOUNDARY);
+  if (!match || !match[1]) {
+    throw new Error("Missing YAML front matter");
+  }
+  const metadata = parseFrontMatter(match[1]);
+  const name = sanitizeLine(metadata.name);
+  const description = sanitizeLine(metadata.description);
+  if (!name) {
+    throw new Error("`name` is required");
+  }
+  if (!description) {
+    throw new Error("`description` is required");
+  }
+  if (name.length > NAME_LIMIT) {
+    throw new Error(`name longer than ${NAME_LIMIT} characters`);
+  }
+  if (description.length > DESCRIPTION_LIMIT) {
+    throw new Error(`description longer than ${DESCRIPTION_LIMIT} characters`);
+  }
+  const body = text.slice(match[0].length).trim();
+  return {
+    name,
+    description,
+    filePath,
+    body,
+  };
 }
 
 export function formatSkillsSection(skills: SkillSummary[]): string {
@@ -192,15 +214,13 @@ export function formatSkillsSection(skills: SkillSummary[]): string {
   return lines.join("\n");
 }
 
-function escapeXml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
+export function formatLoadedSkill(skill: SkillDefinition): string {
+  const skillPath = skill.filePath.replace(/\/SKILL\.md$/, "");
+  const sections: string[] = [];
+  sections.push(`Base directory for this skill: ${skillPath}`);
+  sections.push("");
+  sections.push(skill.body.trim());
 
-export function summarizeSkills(skills: SkillDefinition[]): SkillSummary[] {
-  return skills.map(({ body, ...rest }) => rest);
+  sections.push(`\n---\n**Launched skill**: ${escapeXml(skill.name)}`);
+  return sections.join("\n");
 }

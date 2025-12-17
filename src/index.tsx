@@ -23,7 +23,7 @@ import { buildSystemPrompt } from "./prompts";
 import { webSearch } from "../tools/web-search";
 import { subAgent } from "../tools/sub-agent";
 import { loadSkill } from "../tools/load-skill";
-import { loadSkills, summarizeSkills, type SkillDefinition } from "./skills";
+import { loadSkills, type SkillDefinition } from "./skills";
 
 dotenv.config();
 
@@ -45,8 +45,7 @@ type ChatMessage = UIMessage<
 >;
 
 const skills = loadSkills();
-const skillSummaries = summarizeSkills(skills);
-const defaultSystemPrompt = buildSystemPrompt(skillSummaries);
+const defaultSystemPrompt = buildSystemPrompt(skills);
 const skillTriggers = buildSkillTriggers(skills);
 
 // Match $skill-name tokens to trigger the corresponding skill guidance.

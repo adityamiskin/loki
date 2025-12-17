@@ -5,7 +5,7 @@ import { local_shell } from "./local-shell";
 import { webSearch } from "./web-search";
 import { loadSkill } from "./load-skill";
 import { buildSubAgentSystemPrompt } from "../src/prompts";
-import { loadSkills, summarizeSkills } from "../src/skills";
+import { loadSkills } from "../src/skills";
 
 // Sub-agent tools - can use the same tools as the main agent
 const subAgentTools = {
@@ -33,8 +33,7 @@ export const subAgent = tool({
   }),
   execute: async ({ objective, context = [] }) => {
     const skills = loadSkills();
-    const skillSummaries = summarizeSkills(skills);
-    const system = buildSubAgentSystemPrompt(skillSummaries);
+    const system = buildSubAgentSystemPrompt(skills);
 
     const contextBlock =
       context.length > 0
