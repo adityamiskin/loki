@@ -166,8 +166,6 @@ Bun.serve({
         skillTriggers
       );
 
-      console.log("Runtime system prompt:", runtimeSystemPrompt);
-
       const result = streamText({
         model: openai("gpt-5.1"),
         system: runtimeSystemPrompt,
@@ -220,11 +218,48 @@ function App() {
   const markdownSyntaxStyle = useMemo(
     () =>
       SyntaxStyle.fromStyles({
-        keyword: { fg: RGBA.fromHex("#8be9fd") },
-        string: { fg: RGBA.fromHex("#f1fa8c") },
-        comment: { fg: RGBA.fromHex("#6272a4"), italic: true },
-        number: { fg: RGBA.fromHex("#bd93f9") },
-        default: { fg: RGBA.fromHex("#e0e0e0") },
+        // Text formatting
+        bold: { fg: RGBA.fromHex("#e0cc00"), bold: true }, // golden yellow
+        italic: { fg: RGBA.fromHex("#00ccaa"), italic: true }, // teal
+        underline: { fg: RGBA.fromHex("#cc33cc"), underline: true }, // purple
+        dim: { fg: RGBA.fromHex("#555555"), dim: true }, // gray
+        "markup.strong": { fg: RGBA.fromHex("#e0cc00"), bold: true }, // strong emphasis (bold)
+        "markup.italic": { fg: RGBA.fromHex("#00ccaa"), italic: true }, // emphasis (italic)
+        "markup.strikethrough": { fg: RGBA.fromHex("#888888"), dim: true }, // strikethrough (dimmed gray)
+
+        // Headings
+        "markup.heading.1": { fg: RGBA.fromHex("#ff6b6b"), bold: true }, // red, bold
+        "markup.heading.2": { fg: RGBA.fromHex("#ff8e53"), bold: true }, // orange, bold
+        "markup.heading.3": { fg: RGBA.fromHex("#ffa94d"), bold: true }, // light orange, bold
+        "markup.heading.4": { fg: RGBA.fromHex("#ffd43b"), bold: true }, // yellow, bold
+        "markup.heading.5": { fg: RGBA.fromHex("#e0cc00"), bold: true }, // golden yellow, bold
+        "markup.heading.6": { fg: RGBA.fromHex("#d4d4d4"), bold: true }, // light gray, bold
+
+        // Lists
+        "markup.list": { fg: RGBA.fromHex("#51cf66") }, // green for list markers
+        "markup.list.checked": { fg: RGBA.fromHex("#51cf66") }, // green for checked items
+        "markup.list.unchecked": { fg: RGBA.fromHex("#868e96") }, // gray for unchecked items
+
+        // Code blocks and inline code
+        "markup.raw.block": {
+          fg: RGBA.fromHex("#a5d8ff"),
+          bg: RGBA.fromHex("#1a1a1a"),
+        }, // light blue for code blocks
+        "markup.raw": {
+          fg: RGBA.fromHex("#a5d8ff"),
+          bg: RGBA.fromHex("#1a1a1a"),
+        }, // light blue for inline code
+
+        // Links
+        "markup.link": { fg: RGBA.fromHex("#4dabf7"), underline: true }, // blue for links
+        "markup.link.url": { fg: RGBA.fromHex("#74c0fc"), underline: true }, // lighter blue for URLs
+        "markup.link.label": { fg: RGBA.fromHex("#339af0") }, // medium blue for link labels
+
+        // Block quotes
+        "markup.quote": { fg: RGBA.fromHex("#868e96"), italic: true }, // gray, italic for quotes
+
+        // Labels (like language tags in code blocks)
+        label: { fg: RGBA.fromHex("#868e96") }, // gray for labels
       }),
     []
   );
