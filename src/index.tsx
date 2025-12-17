@@ -19,9 +19,11 @@ import { google, type GoogleGenerativeAIProviderOptions } from "@ai-sdk/google";
 import * as dotenv from "dotenv";
 import { local_shell } from "../tools/local-shell";
 import { openai } from "@ai-sdk/openai";
-import { systemPrompt } from "./prompts";
+import { buildSystemPrompt } from "./prompts";
 import { webSearch } from "../tools/web-search";
 import { subAgent } from "../tools/sub-agent";
+import { loadSkill } from "../tools/load-skill";
+import { loadSkills, summarizeSkills, type SkillDefinition } from "./skills";
 
 dotenv.config();
 
@@ -30,13 +32,123 @@ const tools = {
   local_shell,
   webSearch,
   subAgent,
+  loadSkill,
 };
 
 type WebSearchTool = InferUITool<typeof tools.webSearch>;
 type LocalShellTool = InferUITool<typeof tools.local_shell>;
 type SubAgentTool = InferUITool<typeof tools.subAgent>;
+type LoadSkillTool = InferUITool<typeof tools.loadSkill>;
 
-type ChatMessage = UIMessage<WebSearchTool | LocalShellTool | SubAgentTool>;
+type ChatMessage = UIMessage<
+  WebSearchTool | LocalShellTool | SubAgentTool | LoadSkillTool
+>;
+
+const skills = loadSkills();
+const skillSummaries = summarizeSkills(skills);
+const defaultSystemPrompt = buildSystemPrompt(skillSummaries);
+const skillTriggers = buildSkillTriggers(skills);
+
+// Match $skill-name tokens to trigger the corresponding skill guidance.
+const SKILL_REFERENCE_REGEX = /\$([A-Za-z0-9_-]+)/g;
+
+function buildSkillTriggers(
+  skills: SkillDefinition[]
+): Map<string, SkillDefinition> {
+  const map = new Map<string, SkillDefinition>();
+  for (const skill of skills) {
+    for (const key of deriveLookupKeys(skill.name)) {
+      if (!map.has(key)) {
+        map.set(key, skill);
+      }
+    }
+  }
+  return map;
+}
+
+function deriveLookupKeys(name: string): string[] {
+  const lower = name.toLowerCase();
+  const cleaned = lower.replace(/[^a-z0-9\s_-]+/g, " ").trim();
+  const set = new Set<string>();
+  const compact = cleaned.replace(/[\s_-]+/g, "");
+  if (compact) {
+    set.add(compact);
+  }
+  const dashy = cleaned.replace(/[\s_]+/g, "-").replace(/-+/g, "-");
+  if (dashy) {
+    set.add(dashy);
+  }
+  const underscored = cleaned.replace(/[\s-]+/g, "_").replace(/_+/g, "_");
+  if (underscored) {
+    set.add(underscored);
+  }
+  if (cleaned) {
+    set.add(cleaned.replace(/\s+/g, "-"));
+    set.add(cleaned.replace(/\s+/g, "_"));
+  }
+  if (!set.size) {
+    const fallback = lower.replace(/[^a-z0-9]+/g, "");
+    if (fallback) {
+      set.add(fallback);
+    }
+  }
+  return Array.from(set).filter(Boolean);
+}
+
+function flattenMessageText(message: ChatMessage): string {
+  return message.parts
+    .filter((part) => part.type === "text")
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("");
+}
+
+function collectTriggeredSkills(
+  messages: ChatMessage[],
+  triggers: Map<string, SkillDefinition>
+): SkillDefinition[] {
+  const seen = new Set<SkillDefinition>();
+  for (const message of messages) {
+    if (message.role !== "user") {
+      continue;
+    }
+    const text = flattenMessageText(message);
+    if (!text) {
+      continue;
+    }
+    for (const match of text.matchAll(SKILL_REFERENCE_REGEX)) {
+      const token = match[1]?.toLowerCase();
+      if (!token) {
+        continue;
+      }
+      const skill = triggers.get(token);
+      if (skill) {
+        seen.add(skill);
+      }
+    }
+  }
+  return Array.from(seen);
+}
+
+function buildRuntimeSystemPrompt(
+  messages: ChatMessage[],
+  basePrompt: string,
+  triggers: Map<string, SkillDefinition>
+): string {
+  if (!triggers.size) {
+    return basePrompt;
+  }
+  const triggeredSkills = collectTriggeredSkills(messages, triggers);
+  if (!triggeredSkills.length) {
+    return basePrompt;
+  }
+  const bodySections = triggeredSkills
+    .map((skill) => {
+      const guidance = skill.body || "(skill body unavailable)";
+      return `### Skill: ${skill.name}\nFile: ${skill.filePath}\n${guidance}`;
+    })
+    .join("\n\n");
+  return `${basePrompt}\n\n## Skill Guidance\n${bodySections}`;
+}
 
 // Start local HTTP server for chat API
 const PORT = 3001;
@@ -48,13 +160,20 @@ Bun.serve({
       const body = (await req.json()) as { messages?: ChatMessage[] };
       const messages = body.messages || [];
 
+      const runtimeSystemPrompt = buildRuntimeSystemPrompt(
+        messages,
+        defaultSystemPrompt,
+        skillTriggers
+      );
+
+      console.log("Runtime system prompt:", runtimeSystemPrompt);
+
       const result = streamText({
         model: openai("gpt-5.1"),
-        system: systemPrompt,
+        system: runtimeSystemPrompt,
         messages: convertToModelMessages(messages),
-        temperature: 0.7,
         tools,
-        stopWhen: stepCountIs(10),
+        stopWhen: stepCountIs(20),
         abortSignal: req.signal,
         onAbort: ({ steps }) => {
           console.log("Stream aborted after", steps.length, "steps");
@@ -310,9 +429,15 @@ function App() {
                     switch (part.type) {
                       case "reasoning":
                         return (
-                          <text key={partIndex} fg="#8888ff">
-                            💭 {part.text}
-                          </text>
+                          <code
+                            key={partIndex}
+                            syntaxStyle={markdownSyntaxStyle}
+                            content={part.text}
+                            streaming={true}
+                            filetype="markdown"
+                            conceal={true}
+                            width="100%"
+                          />
                         );
 
                       case "text":
@@ -438,6 +563,59 @@ function App() {
                             return (
                               <text key={callId} fg={subAgentTheme.text}>
                                 [subAgent] Error: {part.errorText}
+                              </text>
+                            );
+                        }
+                        break;
+                      }
+                      case "tool-loadSkill": {
+                        const callId = part.toolCallId;
+                        const input = part.input as { skillName?: string };
+                        const output = part.output as
+                          | {
+                              skillName?: string | null;
+                              description?: string;
+                              baseDirectory?: string | null;
+                              instructions?: string | null;
+                              error?: string;
+                            }
+                          | undefined;
+                        switch (part.state) {
+                          case "input-streaming":
+                            return (
+                              <text key={callId} fg="#888888">
+                                Loading skill...
+                              </text>
+                            );
+                          case "input-available":
+                            return (
+                              <text key={callId} fg="#9d7cd8">
+                                [loadSkill] Loading:{" "}
+                                {input?.skillName || "(unknown)"}
+                              </text>
+                            );
+                          case "output-available":
+                            if (output?.error) {
+                              return (
+                                <text key={callId} fg="#ff4444">
+                                  [loadSkill] Error: {output.error}
+                                </text>
+                              );
+                            }
+                            return (
+                              <text key={callId} fg="#9d7cd8">
+                                [loadSkill] Loaded:{" "}
+                                {output?.skillName ||
+                                  input?.skillName ||
+                                  "(unknown)"}
+                                {output?.baseDirectory &&
+                                  ` (${output.baseDirectory})`}
+                              </text>
+                            );
+                          case "output-error":
+                            return (
+                              <text key={callId} fg="#ff4444">
+                                [loadSkill] Error: {part.errorText}
                               </text>
                             );
                         }

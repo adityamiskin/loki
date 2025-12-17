@@ -3,11 +3,15 @@ import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
 import { local_shell } from "./local-shell";
 import { webSearch } from "./web-search";
+import { loadSkill } from "./load-skill";
+import { buildSubAgentSystemPrompt } from "../src/prompts";
+import { loadSkills, summarizeSkills } from "../src/skills";
 
 // Sub-agent tools - can use the same tools as the main agent
 const subAgentTools = {
   local_shell,
   webSearch,
+  loadSkill,
 };
 
 export const subAgent = tool({
@@ -28,29 +32,9 @@ export const subAgent = tool({
       ),
   }),
   execute: async ({ objective, context = [] }) => {
-    const system = [
-      "You are an expert sub-agent with tools.",
-      "Goal: finish the objective with the fewest effective steps—skip unnecessary tool calls.",
-      "",
-      "AVAILABLE TOOLS:",
-      "- local_shell: inspect files, run commands, explore directories, execute scripts",
-      "- webSearch: fetch external info or docs",
-      "",
-      "WORK STRATEGY:",
-      "- Plan briefly, then act; avoid redundant exploration.",
-      "- Stop using tools once you have enough to answer well.",
-      "- Prefer direct inspection over broad listing; target likely files/paths.",
-      "- If blocked, adjust approach once; don't loop blindly.",
-      "",
-      "OUTPUT REQUIREMENTS:",
-      "- Return an information-dense answer: no fluff, no repetition.",
-      "- Include concrete findings, paths, and snippets when relevant.",
-      "- Summarize clearly; keep it compact but complete.",
-      "- Mention key tool actions only if they add clarity.",
-      "",
-      "ERROR HANDLING:",
-      "- If a command fails, try one alternative; then continue or summarize with what you have.",
-    ].join("\n");
+    const skills = loadSkills();
+    const skillSummaries = summarizeSkills(skills);
+    const system = buildSubAgentSystemPrompt(skillSummaries);
 
     const contextBlock =
       context.length > 0

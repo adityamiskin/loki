@@ -7,7 +7,7 @@ const execAsync = promisify(exec);
 
 export const local_shell = tool({
   description:
-    "Execute a shell command locally. Use this to run commands, check files, list directories, etc.",
+    "Execute a shell command locally. Use this to run commands, check files, list directories, write files, apply patches, find etc.",
   inputSchema: z.object({
     command: z
       .string()

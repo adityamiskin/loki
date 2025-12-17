@@ -128,6 +128,14 @@ This will:
 - _"Find secrets in this codebase: /path/to/code"_
 - _"Help me solve this CTF challenge: [description]"_
 
+### Skill Integration
+
+- **Enable the feature** by setting `LOKI_SKILLS=true` before starting Loki.
+- **Skill files** now live inside this repo under `skills/**/SKILL.md` by default, so you can keep your procedural knowledge versioned alongside Loki. Each file needs YAML front matter with `name` (≤100 chars) and `description` (≤500 chars); the body remains on disk until the skill is triggered.
+- **Custom directories** are supported via `LOKI_SKILLS_DIR=/path/to/skills` if you want to relocate skills elsewhere.
+- **Loki lists** each discovered skill in the runtime prompt so the agent can mention available helpers without loading their full bodies.
+- **Invalid skill files** are skipped with a warning logged in the terminal; fix the front matter and restart to reload them.
+
 ## Architecture
 
 Loki is built with:
