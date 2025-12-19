@@ -5,9 +5,9 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
-export const local_shell = tool({
+export const shell = tool({
   description:
-    "Execute a shell command locally. Use this to run commands, check files, list directories, write files, apply patches, find etc.",
+    "Execute a shell command. Use this to run commands, check files, list directories, write files, apply patches, find etc. for python related stuff, first `source .venv/bin/activate.fish` and then you can use any python stuff. use uv instead of pip. Ex. `uv pip install <package_name>` or `uv run <script.py>`",
   inputSchema: z.object({
     command: z
       .string()
@@ -16,7 +16,7 @@ export const local_shell = tool({
       ),
   }),
   execute: async ({ command }) => {
-    const TIMEOUT_MS = 10000; // 10 second timeout
+    const TIMEOUT_MS = 300000; // 5 minutes timeout
 
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {

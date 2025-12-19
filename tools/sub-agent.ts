@@ -1,7 +1,7 @@
 import { tool, streamText, stepCountIs } from "ai";
 import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
-import { local_shell } from "./local-shell";
+import { shell } from "./local-shell";
 import { webSearch } from "./web-search";
 import { loadSkill } from "./load-skill";
 import { buildSubAgentSystemPrompt } from "../src/prompts";
@@ -9,7 +9,7 @@ import { loadSkills } from "../src/skills";
 
 // Sub-agent tools - can use the same tools as the main agent
 const subAgentTools = {
-  local_shell,
+  shell,
   webSearch,
   loadSkill,
 };
@@ -59,7 +59,7 @@ export const subAgent = tool({
 
     try {
       const result = streamText({
-        model: openai("gpt-4.1"),
+        model: openai("gpt-5.1"),
         system,
         messages,
         tools: subAgentTools,

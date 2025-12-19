@@ -20,6 +20,7 @@
     "@opentui/react": "^0.1.54",
     "@types/react": "^19.2.7",
     "ai": "^5.0.106",
+    "clipboardy": "^5.0.2",
     "dotenv": "^17.2.3",
     "marked": "^17.0.1",
     "react": "^19.1.1",

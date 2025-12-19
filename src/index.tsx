@@ -4,7 +4,7 @@ import {
   SyntaxStyle,
   type KeyBinding,
 } from "@opentui/core";
-import { createRoot, useKeyboard } from "@opentui/react";
+import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import {
   stepCountIs,
@@ -17,26 +17,27 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { google, type GoogleGenerativeAIProviderOptions } from "@ai-sdk/google";
 import * as dotenv from "dotenv";
-import { local_shell } from "../tools/local-shell";
+import { shell } from "../tools/local-shell";
 import { openai } from "@ai-sdk/openai";
 import { buildSystemPrompt } from "./prompts";
 import { webSearch } from "../tools/web-search";
 import { subAgent } from "../tools/sub-agent";
 import { loadSkill } from "../tools/load-skill";
 import { loadSkills, type SkillDefinition } from "./skills";
+import clipboardy from "clipboardy";
 
 dotenv.config();
 
 // Define custom shell tool
 const tools = {
-  local_shell,
+  shell,
   webSearch,
   subAgent,
   loadSkill,
 };
 
 type WebSearchTool = InferUITool<typeof tools.webSearch>;
-type LocalShellTool = InferUITool<typeof tools.local_shell>;
+type LocalShellTool = InferUITool<typeof tools.shell>;
 type SubAgentTool = InferUITool<typeof tools.subAgent>;
 type LoadSkillTool = InferUITool<typeof tools.loadSkill>;
 
@@ -153,7 +154,7 @@ function buildRuntimeSystemPrompt(
 const PORT = 3001;
 Bun.serve({
   port: PORT,
-  idleTimeout: 60, // 60 second idle timeout for long-running tool executions
+  idleTimeout: 255, // 10 minutes idle timeout for long-running tool executions
   async fetch(req) {
     if (req.method === "POST" && req.url.endsWith("/api/chat")) {
       const body = (await req.json()) as { messages?: ChatMessage[] };
@@ -195,14 +196,66 @@ Bun.serve({
 });
 
 console.log(`Chat API server running on http://localhost:${PORT}`);
+const copyToClipboard = async (text: string) => {
+  try {
+    // Try clipboardy first (cross-platform clipboard library)
+    await clipboardy.write(text);
+  } catch (err) {
+    // Fallback to OSC 52 escape sequence (works in terminals that support it)
+    try {
+      const base64 = Buffer.from(text).toString("base64");
+      process.stdout.write(`\x1b]52;c;${base64}\x07`);
+    } catch (oscErr) {
+      console.error("Failed to copy to clipboard:", err || oscErr);
+    }
+  }
+};
+
+function Spinner({ frames }: { frames: string[] }) {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setIndex((prev) => (prev + 1) % frames.length);
+    }, 90);
+    return () => clearInterval(id);
+  }, [frames.length]);
+
+  return <text fg="#3b82f6">{frames[index]}</text>;
+}
 
 function App() {
   const inputRef = useRef<any>(null);
+  const renderer = useRenderer();
+  const [showCopied, setShowCopied] = useState(false);
+  const copiedTimeoutRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!renderer) return;
+
+    const handleSelection = async (selection: any) => {
+      const text = selection.getSelectedText();
+      if (text) {
+        await copyToClipboard(text);
+        setShowCopied(true);
+        if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
+        copiedTimeoutRef.current = setTimeout(() => {
+          setShowCopied(false);
+        }, 2000);
+      }
+    };
+
+    renderer.on("selection", handleSelection);
+    return () => {
+      renderer.off("selection", handleSelection);
+      if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
+    };
+  }, [renderer]);
+
   const [logs, setLogs] = useState<
     Array<{ type: "log" | "error"; message: string; timestamp: number }>
   >([]);
   const [showLogs, setShowLogs] = useState(false);
-  const [spinnerIndex, setSpinnerIndex] = useState(0);
 
   const { messages, sendMessage, stop, status } = useChat<ChatMessage>({
     transport: new DefaultChatTransport({
@@ -262,27 +315,7 @@ function App() {
       }),
     []
   );
-  const subAgentTheme = useMemo(
-    () => ({
-      background: "#171717", // Muted backdrop for sub-agent blocks
-      completedBackground: "#141414", // Background for completed sub-agent blocks
-      text: "#999999", // Muted text color for sub-agent messages
-    }),
-    []
-  );
   const isLoading = status === "submitted" || status === "streaming";
-
-  // Animate a simple spinner while the agent is working
-  useEffect(() => {
-    if (!isLoading) {
-      setSpinnerIndex(0);
-      return;
-    }
-    const id = setInterval(() => {
-      setSpinnerIndex((prev) => (prev + 1) % spinnerFrames.length);
-    }, 90);
-    return () => clearInterval(id);
-  }, [isLoading, spinnerFrames.length]);
 
   // Capture console logs
   useEffect(() => {
@@ -349,7 +382,7 @@ function App() {
     if (key.ctrl && key.name === "c") {
       process.exit(0);
     }
-    if (key.name === "`" || key.name === "backtick") {
+    if (key.ctrl && key.name === "q") {
       setShowLogs((prev: boolean) => !prev);
     }
     // Enter/Shift+Enter handling is done by textarea keyBindings
@@ -395,8 +428,24 @@ function App() {
       flexDirection="column"
       width="100%"
       height="100%"
-      backgroundColor="#000000"
+      backgroundColor="#0d0d0d"
     >
+      {showCopied && (
+        <box
+          position="absolute"
+          top={2}
+          right={3}
+          width={24}
+          height={3}
+          backgroundColor="#1a1a1a"
+          zIndex={1000}
+          flexDirection="row"
+          alignItems="center"
+          justifyContent="center"
+        >
+          <text fg="#9ca3af">Copied to clipboard</text>
+        </box>
+      )}
       {/* Output panel - scrollable message area */}
       <scrollbox
         flexGrow={1}
@@ -404,53 +453,50 @@ function App() {
         stickyStart="bottom"
         rootOptions={{
           flexGrow: 1,
-          backgroundColor: "#000000",
+          backgroundColor: "#0d0d0d",
         }}
         wrapperOptions={{
-          backgroundColor: "#000000",
+          backgroundColor: "#0d0d0d",
         }}
         viewportOptions={{
-          backgroundColor: "#000000",
+          backgroundColor: "#0d0d0d",
         }}
         contentOptions={{
           flexDirection: "column",
-          gap: 1,
-          padding: 1,
-          backgroundColor: "#000000",
+          gap: 0,
+          paddingLeft: 2,
+          paddingRight: 2,
+          paddingTop: 1,
+          paddingBottom: 1,
+          backgroundColor: "#0d0d0d",
         }}
         scrollbarOptions={{
           showArrows: false,
           trackOptions: {
-            foregroundColor: "#333333",
-            backgroundColor: "#1a1a1a",
+            foregroundColor: "#2a2a2a",
+            backgroundColor: "#0d0d0d",
           },
         }}
       >
         {messages.map((message) => {
           const isUser = message.role === "user";
-          const hasSubAgent = message.parts?.some(
-            (part) => part.type === "tool-subAgent"
-          );
-          const hasText = message.parts?.some((part) => part.type === "text");
-          // Only apply sub-agent background if message has sub-agent parts but no text parts
-          const isSubAgentOnly = hasSubAgent && !hasText;
           return (
             <box key={message.id} flexDirection="column" width="100%">
               <box flexDirection="row" width="100%">
-                {/* Add colored left border for user messages */}
-                {isUser && <box width={0.5} backgroundColor="#1d64ff" />}
+                {/* Left accent border */}
+                <box
+                  width={1}
+                  backgroundColor={isUser ? "#3b82f6" : "transparent"}
+                  marginRight={0.25}
+                />
                 <box
                   flexGrow={1}
-                  backgroundColor={
-                    isUser
-                      ? "#1a1a1a"
-                      : isSubAgentOnly
-                      ? subAgentTheme.background
-                      : "#0a0a0a"
-                  }
-                  padding={1}
+                  backgroundColor={isUser ? "#1a1a1a" : "transparent"}
                   flexDirection="column"
-                  gap={0.5}
+                  padding={1}
+                  paddingLeft={2}
+                  paddingRight={2}
+                  gap={0.25}
                 >
                   {message.parts?.map((part, partIndex) => {
                     // Check if there are sub-agent parts before this text part
@@ -469,7 +515,7 @@ function App() {
                             content={part.text}
                             streaming={true}
                             filetype="markdown"
-                            conceal={true}
+                            drawUnstyledText={false}
                             width="100%"
                           />
                         );
@@ -487,7 +533,7 @@ function App() {
                                 content={part.text || ""}
                                 streaming={true}
                                 filetype="markdown"
-                                conceal={true}
+                                drawUnstyledText={false}
                                 syntaxStyle={markdownSyntaxStyle}
                                 width="100%"
                               />
@@ -495,39 +541,46 @@ function App() {
                           );
                         }
                         return (
-                          <text key={partIndex} fg="#ffffff">
+                          <text key={partIndex} fg="#e5e5e5">
                             {part.text}
                           </text>
                         );
 
-                      case "tool-local_shell": {
+                      case "tool-shell": {
                         const callId = part.toolCallId;
                         switch (part.state) {
                           case "input-streaming":
                             return (
-                              <text key={callId} fg="#888888">
+                              <text key={callId} fg="#6b7280">
                                 Preparing shell command...
                               </text>
                             );
                           case "input-available":
                             return (
-                              <text key={callId} fg="#00ff88">
-                                [local_shell]{" "}
-                                {(part.input as { command: string }).command}
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#10b981">◉</text>
+                                <text fg="#9ca3af">
+                                  {(part.input as { command: string }).command}
+                                </text>
+                              </box>
                             );
                           case "output-available":
                             return (
-                              <text key={callId} fg="#00ff88">
-                                [local_shell]{" "}
-                                {(part.input as { command: string }).command}
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#22c55e">✓</text>
+                                <text fg="#6b7280">
+                                  {(part.input as { command: string }).command}
+                                </text>
+                              </box>
                             );
                           case "output-error":
                             return (
-                              <text key={callId} fg="#ff4444">
-                                [local_shell] Error: {part.errorText}
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">
+                                  Error: {part.errorText}
+                                </text>
+                              </box>
                             );
                         }
                         break;
@@ -548,21 +601,15 @@ function App() {
                           case "input-streaming":
                             return (
                               <box key={callId} flexDirection="row" gap={1}>
-                                <text fg="#ffd700" flexShrink={0}>
-                                  [subAgent]
-                                </text>
-                                <text fg={subAgentTheme.text} flexGrow={1}>
-                                  Spawning sub-agent...
-                                </text>
+                                <text fg="#f59e0b">◐</text>
+                                <text fg="#6b7280">Spawning sub-agent...</text>
                               </box>
                             );
                           case "input-available":
                             return (
                               <box key={callId} flexDirection="row" gap={1}>
-                                <text fg="#ffd700" flexShrink={0}>
-                                  [subAgent]
-                                </text>
-                                <text fg={subAgentTheme.text} flexGrow={1}>
+                                <text fg="#f59e0b">◉</text>
+                                <text fg="#9ca3af">
                                   {input?.objective || "(none)"}
                                 </text>
                               </box>
@@ -570,34 +617,27 @@ function App() {
                           case "output-available":
                             const toolCalls = output?.toolCalls || 0;
                             return (
-                              <box
-                                key={callId}
-                                flexDirection="column"
-                                gap={0.25}
-                              >
-                                <box flexDirection="row" gap={1}>
-                                  <text fg="#00ff88" flexShrink={0}>
-                                    [subAgent]
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#22c55e">✓</text>
+                                <text fg="#6b7280">
+                                  {input?.objective || "(none)"}
+                                </text>
+                                {toolCalls > 0 && (
+                                  <text fg="#4b5563">
+                                    · {toolCalls} tool
+                                    {toolCalls !== 1 ? "s" : ""}
                                   </text>
-                                  <box flexDirection="column" gap={0.25}>
-                                    <text fg={subAgentTheme.text} flexGrow={1}>
-                                      {input?.objective || "(none)"}
-                                    </text>
-                                    {toolCalls > 0 && (
-                                      <text fg={subAgentTheme.text}>
-                                        {toolCalls} tool
-                                        {toolCalls !== 1 ? "s" : ""} used
-                                      </text>
-                                    )}
-                                  </box>
-                                </box>
+                                )}
                               </box>
                             );
                           case "output-error":
                             return (
-                              <text key={callId} fg={subAgentTheme.text}>
-                                [subAgent] Error: {part.errorText}
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">
+                                  Error: {part.errorText}
+                                </text>
+                              </box>
                             );
                         }
                         break;
@@ -617,40 +657,50 @@ function App() {
                         switch (part.state) {
                           case "input-streaming":
                             return (
-                              <text key={callId} fg="#888888">
-                                Loading skill...
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#a855f7">◐</text>
+                                <text fg="#6b7280">Loading skill...</text>
+                              </box>
                             );
                           case "input-available":
                             return (
-                              <text key={callId} fg="#9d7cd8">
-                                [loadSkill] Loading:{" "}
-                                {input?.skillName || "(unknown)"}
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#a855f7">◉</text>
+                                <text fg="#9ca3af">
+                                  {input?.skillName || "(unknown)"}
+                                </text>
+                              </box>
                             );
                           case "output-available":
                             if (output?.error) {
                               return (
-                                <text key={callId} fg="#ff4444">
-                                  [loadSkill] Error: {output.error}
-                                </text>
+                                <box key={callId} flexDirection="row" gap={1}>
+                                  <text fg="#ef4444">✗</text>
+                                  <text fg="#6b7280">{output.error}</text>
+                                </box>
                               );
                             }
                             return (
-                              <text key={callId} fg="#9d7cd8">
-                                [loadSkill] Loaded:{" "}
-                                {output?.skillName ||
-                                  input?.skillName ||
-                                  "(unknown)"}
-                                {output?.baseDirectory &&
-                                  ` (${output.baseDirectory})`}
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#22c55e">✓</text>
+                                <text fg="#6b7280">
+                                  {output?.skillName ||
+                                    input?.skillName ||
+                                    "(unknown)"}
+                                </text>
+                                {output?.baseDirectory && (
+                                  <text fg="#4b5563">
+                                    · {output.baseDirectory}
+                                  </text>
+                                )}
+                              </box>
                             );
                           case "output-error":
                             return (
-                              <text key={callId} fg="#ff4444">
-                                [loadSkill] Error: {part.errorText}
-                              </text>
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">{part.errorText}</text>
+                              </box>
                             );
                         }
                         break;
@@ -670,16 +720,16 @@ function App() {
           flexGrow={0}
           flexShrink={0}
           height={10}
-          backgroundColor="#1a1a1a"
+          backgroundColor="#111111"
           borderStyle="single"
-          borderColor="#333333"
+          borderColor="#2a2a2a"
           padding={1}
           flexDirection="column"
           gap={0.5}
         >
           <box flexDirection="row" justifyContent="space-between">
-            <text fg="#888888">Console Logs (` to toggle)</text>
-            <text fg="#888888">{logs.length} logs</text>
+            <text fg="#6b7280">Console Logs (` to toggle)</text>
+            <text fg="#4b5563">{logs.length} logs</text>
           </box>
           <scrollbox
             flexGrow={1}
@@ -687,30 +737,30 @@ function App() {
             stickyStart="bottom"
             rootOptions={{
               flexGrow: 1,
-              backgroundColor: "#0a0a0a",
+              backgroundColor: "#0d0d0d",
             }}
             wrapperOptions={{
-              backgroundColor: "#0a0a0a",
+              backgroundColor: "#0d0d0d",
             }}
             viewportOptions={{
-              backgroundColor: "#0a0a0a",
+              backgroundColor: "#0d0d0d",
             }}
             contentOptions={{
               flexDirection: "column",
               gap: 0.5,
               padding: 0.5,
-              backgroundColor: "#0a0a0a",
+              backgroundColor: "#0d0d0d",
             }}
             scrollbarOptions={{
               showArrows: false,
               trackOptions: {
-                foregroundColor: "#333333",
-                backgroundColor: "#1a1a1a",
+                foregroundColor: "#2a2a2a",
+                backgroundColor: "#111111",
               },
             }}
           >
             {logs.length === 0 ? (
-              <text fg="#666666">No logs yet...</text>
+              <text fg="#4b5563">No logs yet...</text>
             ) : (
               logs.map(
                 (
@@ -723,7 +773,7 @@ function App() {
                 ) => (
                   <text
                     key={index}
-                    fg={log.type === "error" ? "#ff4444" : "#8888ff"}
+                    fg={log.type === "error" ? "#ef4444" : "#60a5fa"}
                   >
                     [{new Date(log.timestamp).toLocaleTimeString()}]{" "}
                     {log.message}
@@ -737,53 +787,65 @@ function App() {
 
       {/* Input container */}
       <box
-        height={6}
         flexGrow={0}
         flexShrink={0}
         padding={1}
-        margin={1}
-        backgroundColor="#0a0a0a"
+        backgroundColor="#0d0d0d"
+        flexDirection="column"
       >
-        <textarea
-          ref={inputRef}
-          width="100%"
-          height={5}
-          placeholder=""
-          backgroundColor="#000000"
-          focusedBackgroundColor="#000000"
-          textColor="#ffffff"
-          focusedTextColor="#ffffff"
-          keyBindings={customKeyBindings}
-          onSubmit={handleSubmit}
-        />
-      </box>
-
-      {/* Instructions */}
-      <box
-        flexGrow={0}
-        flexShrink={0}
-        paddingLeft={1}
-        paddingRight={1}
-        paddingBottom={1}
-        flexDirection="row"
-        gap={1}
-        justifyContent="space-between"
-      >
-        <box flexDirection="row" gap={1}>
-          {isLoading && (
-            <>
-              <text fg="#00ccff">
-                {spinnerFrames[spinnerIndex % spinnerFrames.length]}
-              </text>
-              <text fg="#666666">|</text>
-              <text fg="#00ccff">esc</text>
-              <text fg="#666666">interrupt</text>
-            </>
-          )}
+        {/* Input box with left accent border */}
+        <box flexDirection="row" width="100%">
+          <box
+            flexGrow={1}
+            backgroundColor="#1a1a1a"
+            paddingLeft={2}
+            paddingRight={2}
+            paddingTop={1}
+            paddingBottom={1}
+            marginBottom={1}
+            flexDirection="column"
+          >
+            <textarea
+              ref={inputRef}
+              width="100%"
+              height={3}
+              placeholder=""
+              keyBindings={customKeyBindings}
+              onSubmit={handleSubmit}
+            />
+          </box>
         </box>
-        <box flexDirection="row" gap={1}>
-          <text fg="#00ccff">`</text>
-          <text fg="#666666">logs</text>
+        {/* Bottom status bar */}
+        <box
+          flexDirection="row"
+          justifyContent="space-between"
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          <box flexDirection="row" justifyContent="space-between">
+            <box flexDirection="row" gap={1}>
+              {isLoading ? (
+                <>
+                  <Spinner frames={spinnerFrames} />
+                  <text fg="#4b5563">Working...</text>
+                </>
+              ) : null}
+            </box>
+          </box>
+
+          <box flexDirection="row" gap={2}>
+            <text fg="#4b5563">{process.cwd()}</text>
+
+            <box flexDirection="row" gap={1}>
+              <text fg="#ffffff">esc</text>
+              <text fg="#4b5563">interrupt</text>
+            </box>
+
+            <box flexDirection="row" gap={1}>
+              <text fg="#ffffff">ctrl+q</text>
+              <text fg="#4b5563">logs</text>
+            </box>
+          </box>
         </box>
       </box>
     </box>
