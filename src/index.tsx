@@ -17,33 +17,20 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { google, type GoogleGenerativeAIProviderOptions } from "@ai-sdk/google";
 import * as dotenv from "dotenv";
-import { shell } from "../tools/local-shell";
 import { openai } from "@ai-sdk/openai";
 import { buildSystemPrompt } from "./prompts";
-import { webSearch } from "../tools/web-search";
-import { subAgent } from "../tools/sub-agent";
-import { loadSkill } from "../tools/load-skill";
 import { loadSkills, type SkillDefinition } from "./skills";
+import {
+  tools,
+  type AllTools,
+  subAgentProgress,
+  type SubAgentSession,
+} from "../tools/index";
 import clipboardy from "clipboardy";
 
 dotenv.config();
 
-// Define custom shell tool
-const tools = {
-  shell,
-  webSearch,
-  subAgent,
-  loadSkill,
-};
-
-type WebSearchTool = InferUITool<typeof tools.webSearch>;
-type LocalShellTool = InferUITool<typeof tools.shell>;
-type SubAgentTool = InferUITool<typeof tools.subAgent>;
-type LoadSkillTool = InferUITool<typeof tools.loadSkill>;
-
-type ChatMessage = UIMessage<
-  WebSearchTool | LocalShellTool | SubAgentTool | LoadSkillTool
->;
+type ChatMessage = UIMessage<AllTools>;
 
 const skills = loadSkills();
 const defaultSystemPrompt = buildSystemPrompt(skills);
@@ -176,7 +163,16 @@ Bun.serve({
         onAbort: ({ steps }) => {
           console.log("Stream aborted after", steps.length, "steps");
         },
+        onChunk: (chunk) => {
+          console.log("Chunk:", chunk);
+        },
         providerOptions: {
+          google: {
+            thinkingConfig: {
+              thinkingLevel: "high",
+              includeThoughts: true,
+            },
+          } satisfies GoogleGenerativeAIProviderOptions,
           openai: {
             reasoningSummary: "auto",
           },
@@ -222,6 +218,136 @@ function Spinner({ frames }: { frames: string[] }) {
   }, [frames.length]);
 
   return <text fg="#3b82f6">{frames[index]}</text>;
+}
+
+function SubAgentDisplay({
+  objective,
+  isRunning,
+  sessionId,
+}: {
+  objective: string;
+  isRunning: boolean;
+  sessionId?: string;
+}) {
+  const [session, setSession] = useState<SubAgentSession | null>(null);
+
+  useEffect(() => {
+    const findSession = () => {
+      if (sessionId) {
+        const byId = subAgentProgress.getSession(sessionId);
+        if (byId) {
+          setSession({ ...byId, actions: [...byId.actions] });
+          return;
+        }
+      }
+      const sessions = subAgentProgress.getAllSessions();
+      const matching = sessions.find((s) => s.objective === objective);
+      if (matching) {
+        setSession({ ...matching, actions: [...matching.actions] });
+      }
+    };
+
+    findSession();
+
+    const handleUpdate = () => {
+      findSession();
+    };
+
+    subAgentProgress.on("update", handleUpdate);
+    return () => {
+      subAgentProgress.off("update", handleUpdate);
+    };
+  }, [objective, sessionId]);
+
+  if (!session || session.actions.length === 0) {
+    return null;
+  }
+
+  return (
+    <box flexDirection="column" marginTop={0.25} marginBottom={0.25} gap={0}>
+      {session.actions.map((action, index) => {
+        const isLast = index === session.actions.length - 1;
+        const prefix = isLast && !isRunning ? "└" : "├";
+        const statusColor =
+          action.status === "running"
+            ? "#f59e0b"
+            : action.status === "completed"
+            ? "#9ca3af"
+            : action.status === "error"
+            ? "#ef4444"
+            : "#4b5563";
+
+        return (
+          <box key={action.id} flexDirection="row" gap={1}>
+            <text fg="#4b5563">{prefix}</text>
+            <text fg={statusColor}>{action.displayText}</text>
+          </box>
+        );
+      })}
+    </box>
+  );
+}
+
+function SubAgentCard({
+  objective,
+  sessionId,
+  toolCalls,
+  isRunning,
+  status,
+  errorText,
+}: {
+  objective: string;
+  sessionId?: string;
+  toolCalls?: number;
+  isRunning: boolean;
+  status: "spawning" | "running" | "completed" | "error";
+  errorText?: string;
+}) {
+  const [hover, setHover] = useState(false);
+  const accentColor =
+    status === "error"
+      ? "#ef4444"
+      : status === "completed"
+      ? "#10b981"
+      : "#f59e0b";
+  const bgColor = hover ? "#111111" : "#0f0f0f";
+
+  return (
+    <box
+      flexDirection="column"
+      paddingTop={1}
+      paddingBottom={2}
+      paddingLeft={2}
+      paddingRight={1}
+      marginTop={0.5}
+      marginBottom={1}
+      gap={0.25}
+      border={["left"]}
+      borderColor="#1f2937"
+      backgroundColor={bgColor}
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+    >
+      <box flexDirection="row" gap={1} alignItems="center">
+        <text fg={accentColor}>◉ </text>
+        <text fg="#e5e5e5">
+          {status === "spawning"
+            ? "Delegating..."
+            : `${objective || "(unknown sub-agent task)"}`}
+        </text>
+      </box>
+
+      {status === "error" && errorText ? (
+        <text fg="#ef4444">Error: {errorText}</text>
+      ) : (
+        <SubAgentDisplay
+          objective={objective}
+          sessionId={sessionId}
+          isRunning={isRunning}
+        />
+      )}
+    </box>
+  );
 }
 
 function App() {
@@ -496,16 +622,9 @@ function App() {
                   padding={1}
                   paddingLeft={2}
                   paddingRight={2}
-                  gap={0.25}
+                  gap={0}
                 >
                   {message.parts?.map((part, partIndex) => {
-                    // Check if there are sub-agent parts before this text part
-                    const hasSubAgentBefore =
-                      !isUser &&
-                      part.type === "text" &&
-                      message.parts
-                        ?.slice(0, partIndex)
-                        .some((p) => p.type === "tool-subAgent");
                     switch (part.type) {
                       case "reasoning":
                         return (
@@ -524,11 +643,7 @@ function App() {
                         // Render assistant text as Markdown using OpenTUI's code renderer.
                         if (!isUser) {
                           return (
-                            <box
-                              key={partIndex}
-                              marginTop={hasSubAgentBefore ? 0.5 : 0}
-                              width="100%"
-                            >
+                            <box key={partIndex} marginTop={0.5} width="100%">
                               <code
                                 content={part.text || ""}
                                 streaming={true}
@@ -567,7 +682,7 @@ function App() {
                           case "output-available":
                             return (
                               <box key={callId} flexDirection="row" gap={1}>
-                                <text fg="#22c55e">✓</text>
+                                <text fg="#6b7280">⟶</text>
                                 <text fg="#6b7280">
                                   {(part.input as { command: string }).command}
                                 </text>
@@ -595,51 +710,39 @@ function App() {
                               result?: string;
                               toolCalls?: number;
                               completed?: boolean;
+                              sessionId?: string;
                             }
                           | undefined;
-                        switch (part.state) {
-                          case "input-streaming":
-                            return (
-                              <box key={callId} flexDirection="row" gap={1}>
-                                <text fg="#f59e0b">◐</text>
-                                <text fg="#6b7280">Spawning sub-agent...</text>
-                              </box>
-                            );
-                          case "input-available":
-                            return (
-                              <box key={callId} flexDirection="row" gap={1}>
-                                <text fg="#f59e0b">◉</text>
-                                <text fg="#9ca3af">
-                                  {input?.objective || "(none)"}
-                                </text>
-                              </box>
-                            );
-                          case "output-available":
-                            const toolCalls = output?.toolCalls || 0;
-                            return (
-                              <box key={callId} flexDirection="row" gap={1}>
-                                <text fg="#22c55e">✓</text>
-                                <text fg="#6b7280">
-                                  {input?.objective || "(none)"}
-                                </text>
-                                {toolCalls > 0 && (
-                                  <text fg="#4b5563">
-                                    · {toolCalls} tool
-                                    {toolCalls !== 1 ? "s" : ""}
-                                  </text>
-                                )}
-                              </box>
-                            );
-                          case "output-error":
-                            return (
-                              <box key={callId} flexDirection="row" gap={1}>
-                                <text fg="#ef4444">✗</text>
-                                <text fg="#6b7280">
-                                  Error: {part.errorText}
-                                </text>
-                              </box>
-                            );
-                        }
+                        const objectiveText = input?.objective || "(none)";
+                        const sessionId = output?.sessionId;
+                        const toolCalls = output?.toolCalls;
+                        const completed = output?.completed ?? false;
+                        const status:
+                          | "spawning"
+                          | "running"
+                          | "completed"
+                          | "error" =
+                          part.state === "output-error"
+                            ? "error"
+                            : part.state === "output-available" && completed
+                            ? "completed"
+                            : part.state === "input-streaming"
+                            ? "spawning"
+                            : "running";
+                        const isRunning =
+                          status === "spawning" || status === "running";
+
+                        return (
+                          <SubAgentCard
+                            key={callId}
+                            objective={objectiveText}
+                            sessionId={sessionId}
+                            toolCalls={toolCalls}
+                            isRunning={isRunning}
+                            status={status}
+                            errorText={part.errorText}
+                          />
+                        );
                         break;
                       }
                       case "tool-loadSkill": {
@@ -682,7 +785,7 @@ function App() {
                             }
                             return (
                               <box key={callId} flexDirection="row" gap={1}>
-                                <text fg="#22c55e">✓</text>
+                                <text fg="#6b7280">✓</text>
                                 <text fg="#6b7280">
                                   {output?.skillName ||
                                     input?.skillName ||
@@ -700,6 +803,254 @@ function App() {
                               <box key={callId} flexDirection="row" gap={1}>
                                 <text fg="#ef4444">✗</text>
                                 <text fg="#6b7280">{part.errorText}</text>
+                              </box>
+                            );
+                        }
+                        break;
+                      }
+                      case "tool-editFile": {
+                        const callId = part.toolCallId;
+                        const input = part.input as {
+                          filePath?: string;
+                          oldString?: string;
+                          newString?: string;
+                        };
+                        switch (part.state) {
+                          case "input-streaming":
+                            return (
+                              <text key={callId} fg="#6b7280">
+                                Preparing file edit...
+                              </text>
+                            );
+                          case "input-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#8b5cf6">◉</text>
+                                <text fg="#9ca3af">
+                                  Editing {input?.filePath || "file"}
+                                </text>
+                              </box>
+                            );
+                          case "output-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#6b7280">⟶</text>
+                                <text fg="#6b7280">
+                                  Edited {input?.filePath || "file"}
+                                </text>
+                              </box>
+                            );
+                          case "output-error":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">
+                                  Error editing file: {part.errorText}
+                                </text>
+                              </box>
+                            );
+                        }
+                        break;
+                      }
+                      case "tool-globFiles": {
+                        const callId = part.toolCallId;
+                        const input = part.input as {
+                          pattern?: string;
+                          cwd?: string;
+                        };
+                        const output = part.output as
+                          | {
+                              files?: string[];
+                              count?: number;
+                              results?: string;
+                            }
+                          | undefined;
+                        switch (part.state) {
+                          case "input-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#06b6d4">◉</text>
+                                <text fg="#9ca3af">
+                                  Glob "{input?.pattern || "*"}"
+                                </text>
+                              </box>
+                            );
+                          case "output-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#6b7280">✱</text>
+                                <text fg="#6b7280">
+                                  Glob "{input?.pattern || "*"}" (
+                                  {output?.count || 0} matches)
+                                </text>
+                              </box>
+                            );
+                          case "output-error":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">
+                                  Error searching files: {part.errorText}
+                                </text>
+                              </box>
+                            );
+                        }
+                        break;
+                      }
+                      case "tool-grep": {
+                        const callId = part.toolCallId;
+                        const input = part.input as {
+                          pattern?: string;
+                          path?: string;
+                        };
+                        const output = part.output as
+                          | {
+                              matches?: number;
+                              results?: string;
+                            }
+                          | undefined;
+                        switch (part.state) {
+                          case "input-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#f59e0b">◉</text>
+                                <text fg="#9ca3af">
+                                  Grep "{input?.pattern || "pattern"}"
+                                </text>
+                              </box>
+                            );
+                          case "output-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#6b7280">✱</text>
+                                <text fg="#6b7280">
+                                  Grep "{input?.pattern || "pattern"}" (
+                                  {output?.matches || 0} matches)
+                                </text>
+                              </box>
+                            );
+                          case "output-error":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">
+                                  Error searching: {part.errorText}
+                                </text>
+                              </box>
+                            );
+                        }
+                        break;
+                      }
+                      case "tool-readFile": {
+                        const callId = part.toolCallId;
+                        const input = part.input as {
+                          filePath?: string;
+                          offset?: number;
+                          limit?: number;
+                        };
+                        switch (part.state) {
+                          case "output-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#6b7280">⟶</text>
+                                <text fg="#6b7280">
+                                  Read {input?.filePath || "file"}
+                                </text>
+                              </box>
+                            );
+                          case "output-error":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">
+                                  Error reading file: {part.errorText}
+                                </text>
+                              </box>
+                            );
+                        }
+                        break;
+                      }
+                      case "tool-writeFile": {
+                        const callId = part.toolCallId;
+                        const input = part.input as {
+                          filePath?: string;
+                          content?: string;
+                        };
+                        const output = part.output as
+                          | {
+                              existed?: boolean;
+                              size?: number;
+                              message?: string;
+                            }
+                          | undefined;
+                        switch (part.state) {
+                          case "input-streaming":
+                            return (
+                              <text key={callId} fg="#6b7280">
+                                Writing file...
+                              </text>
+                            );
+                          case "input-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#8b5cf6">◉</text>
+                                <text fg="#9ca3af">
+                                  Writing {input?.filePath || "file"}
+                                </text>
+                              </box>
+                            );
+                          case "output-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#6b7280">⟵</text>
+                                <text fg="#6b7280">
+                                  {output?.message ||
+                                    `Wrote ${input?.filePath || "file"}`}
+                                </text>
+                              </box>
+                            );
+                          case "output-error":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">
+                                  Error writing file: {part.errorText}
+                                </text>
+                              </box>
+                            );
+                        }
+                        break;
+                      }
+                      case "tool-webSearch": {
+                        const callId = part.toolCallId;
+                        switch (part.state) {
+                          case "input-streaming":
+                            return (
+                              <text key={callId} fg="#6b7280">
+                                Searching web...
+                              </text>
+                            );
+                          case "input-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#3b82f6">◉</text>
+                                <text fg="#9ca3af">Searching web</text>
+                              </box>
+                            );
+                          case "output-available":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#6b7280">⟶</text>
+                                <text fg="#6b7280">Web search completed</text>
+                              </box>
+                            );
+                          case "output-error":
+                            return (
+                              <box key={callId} flexDirection="row" gap={1}>
+                                <text fg="#ef4444">✗</text>
+                                <text fg="#6b7280">
+                                  Error searching web: {part.errorText}
+                                </text>
                               </box>
                             );
                         }

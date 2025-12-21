@@ -22,7 +22,9 @@
     "ai": "^5.0.106",
     "clipboardy": "^5.0.2",
     "dotenv": "^17.2.3",
+    "lucide-react": "^0.562.0",
     "marked": "^17.0.1",
+    "pg": "^8.16.3",
     "react": "^19.1.1",
     "remark": "^15.0.1",
     "remark-parse": "^11.0.0"

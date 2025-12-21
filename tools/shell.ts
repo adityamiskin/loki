@@ -6,8 +6,13 @@ import { promisify } from "util";
 const execAsync = promisify(exec);
 
 export const shell = tool({
-  description:
-    "Execute a shell command. Use this to run commands, check files, list directories, write files, apply patches, find etc. for python related stuff, first `source .venv/bin/activate.fish` and then you can use any python stuff. use uv instead of pip. Ex. `uv pip install <package_name>` or `uv run <script.py>`",
+  description: `Execute a shell command. Use this to run commands, check files, list directories, write files, apply patches, find etc. for python related stuff, first \`source .venv/bin/activate.fish\` and then you can use any python stuff. use uv instead of pip. Ex. \`uv pip install <package_name>\` or \`uv run <script.py>\`.
+
+  Usage:
+  - Use this to run commands, check files, list directories, write files, apply patches, find etc.
+  - For python related stuff, first \`source .venv/bin/activate.fish\` and then you can use any python stuff.
+  - use uv instead of pip. Ex. \`uv pip install <package_name>\` or \`uv run <script.py>\`.
+  Full network access is available.`,
   inputSchema: z.object({
     command: z
       .string()

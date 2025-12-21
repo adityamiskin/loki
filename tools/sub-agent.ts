@@ -1,17 +1,24 @@
 import { tool, streamText, stepCountIs } from "ai";
 import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
-import { shell } from "./local-shell";
+import { shell } from "./shell";
 import { webSearch } from "./web-search";
 import { loadSkill } from "./load-skill";
+import { readFile } from "./read";
+import { globFiles } from "./glob";
+import { grep } from "./grep";
 import { buildSubAgentSystemPrompt } from "../src/prompts";
 import { loadSkills } from "../src/skills";
+import { subAgentProgress } from "./subagent-progress";
 
 // Sub-agent tools - can use the same tools as the main agent
 const subAgentTools = {
   shell,
   webSearch,
   loadSkill,
+  readFile,
+  globFiles,
+  grep,
 };
 
 export const subAgent = tool({
@@ -35,6 +42,12 @@ export const subAgent = tool({
     const skills = loadSkills();
     const system = buildSubAgentSystemPrompt(skills);
 
+    // Create a unique session ID for this subagent run
+    const sessionId = `subagent-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 9)}`;
+    subAgentProgress.createSession(sessionId, objective);
+
     const contextBlock =
       context.length > 0
         ? `Additional Context:\n${context
@@ -50,12 +63,6 @@ export const subAgent = tool({
     ];
 
     const maxToolRounds = 30; // internal safety cap; sub-agent gets one more step to summarize
-
-    console.log("Sub-agent starting with:", {
-      objective,
-      context,
-      maxToolRounds,
-    });
 
     try {
       const result = streamText({
@@ -82,30 +89,49 @@ export const subAgent = tool({
       // Collect all text and tool calls from the stream
       let toolCalls = 0;
       let finalText = "";
+      const actionIds: Map<string, string> = new Map(); // Map tool call ID to action ID
 
       for await (const delta of result.fullStream) {
         if (delta.type === "text-delta") {
           finalText += delta.text;
         } else if (delta.type === "tool-call") {
           toolCalls++;
-          console.log(`Tool call #${toolCalls}:`, delta.toolName);
+          // Track the tool call in progress store
+          const actionId = subAgentProgress.addAction(
+            sessionId,
+            delta.toolName,
+            "input" in delta
+              ? (delta.input as Record<string, unknown>)
+              : undefined
+          );
+          actionIds.set(delta.toolCallId, actionId);
+        } else if (delta.type === "tool-result") {
+          // Mark the action as completed
+          const actionId = actionIds.get(delta.toolCallId);
+          if (actionId) {
+            subAgentProgress.completeAction(sessionId, actionId);
+          }
         }
       }
 
-      console.log("Final result:", finalText);
+      // Mark session as complete
+      subAgentProgress.completeSession(sessionId);
 
       return {
         result: finalText.trim() || "(no output generated)",
         toolCalls,
         completed: true,
+        sessionId,
       };
     } catch (error: any) {
       console.error("Sub-agent error:", error);
+      subAgentProgress.completeSession(sessionId, error.message);
       return {
         result: `Error during sub-agent execution: ${error.message}`,
         toolCalls: 0,
         completed: false,
         error: error.message,
+        sessionId,
       };
     }
   },
