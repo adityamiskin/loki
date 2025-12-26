@@ -156,7 +156,7 @@ Bun.serve({
       const result = streamText({
         model: openai("gpt-5.1"),
         system: runtimeSystemPrompt,
-        messages: convertToModelMessages(messages),
+        messages: await convertToModelMessages(messages),
         tools,
         stopWhen: stepCountIs(20),
         abortSignal: req.signal,
