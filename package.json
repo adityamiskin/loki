@@ -16,6 +16,7 @@
     "@ai-sdk/google": "^3.0.1",
     "@ai-sdk/openai": "^3.0.1",
     "@ai-sdk/react": "^3.0.3",
+    "@opentui-ui/toast": "^0.0.3",
     "@opentui/core": "^0.1.54",
     "@opentui/react": "^0.1.54",
     "@types/react": "^19.2.7",

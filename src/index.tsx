@@ -27,6 +27,8 @@ import {
   type SubAgentSession,
 } from "../tools/index";
 import clipboardy from "clipboardy";
+import { toast, TOAST_DURATION } from "@opentui-ui/toast";
+import { Toaster } from "@opentui-ui/toast/react";
 
 dotenv.config();
 
@@ -162,9 +164,6 @@ Bun.serve({
         abortSignal: req.signal,
         onAbort: ({ steps }) => {
           console.log("Stream aborted after", steps.length, "steps");
-        },
-        onChunk: (chunk) => {
-          console.log("Chunk:", chunk);
         },
         providerOptions: {
           google: {
@@ -353,28 +352,24 @@ function SubAgentCard({
 function App() {
   const inputRef = useRef<any>(null);
   const renderer = useRenderer();
-  const [showCopied, setShowCopied] = useState(false);
-  const copiedTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
     if (!renderer) return;
 
     const handleSelection = async (selection: any) => {
       const text = selection.getSelectedText();
+      console.log("text", text);
       if (text) {
         await copyToClipboard(text);
-        setShowCopied(true);
-        if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
-        copiedTimeoutRef.current = setTimeout(() => {
-          setShowCopied(false);
-        }, 2000);
+        toast.info("Copied to clipboard!", {
+          duration: TOAST_DURATION.SHORT,
+        });
       }
     };
 
     renderer.on("selection", handleSelection);
     return () => {
       renderer.off("selection", handleSelection);
-      if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
     };
   }, [renderer]);
 
@@ -556,22 +551,7 @@ function App() {
       height="100%"
       backgroundColor="#0d0d0d"
     >
-      {showCopied && (
-        <box
-          position="absolute"
-          top={2}
-          right={3}
-          width={24}
-          height={3}
-          backgroundColor="#1a1a1a"
-          zIndex={1000}
-          flexDirection="row"
-          alignItems="center"
-          justifyContent="center"
-        >
-          <text fg="#9ca3af">Copied to clipboard</text>
-        </box>
-      )}
+      <Toaster position="top-right" />
       {/* Output panel - scrollable message area */}
       <scrollbox
         flexGrow={1}
