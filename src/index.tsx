@@ -29,6 +29,11 @@ import {
 import clipboardy from "clipboardy";
 import { toast, TOAST_DURATION } from "@opentui-ui/toast";
 import { Toaster } from "@opentui-ui/toast/react";
+import { logger, type LogLevel } from "./utils/logger";
+import {
+  buildDiagnosticsSnapshot,
+  type DiagnosticsSnapshot,
+} from "./utils/diagnostics";
 
 dotenv.config();
 
@@ -38,7 +43,6 @@ const skills = loadSkills();
 const defaultSystemPrompt = buildSystemPrompt(skills);
 const skillTriggers = buildSkillTriggers(skills);
 
-// Match $skill-name tokens to trigger the corresponding skill guidance.
 const SKILL_REFERENCE_REGEX = /\$([A-Za-z0-9_-]+)/g;
 
 function buildSkillTriggers(
@@ -139,13 +143,62 @@ function buildRuntimeSystemPrompt(
   return `${basePrompt}\n\n## Skill Guidance\n${bodySections}`;
 }
 
-// Start local HTTP server for chat API
 const PORT = 3001;
+
+interface HealthCheckResult {
+  status: "healthy" | "degraded" | "unhealthy";
+  timestamp: string;
+  uptime: number;
+  version: string;
+  services: {
+    api: boolean;
+    skills: boolean;
+  };
+  diagnostics: DiagnosticsSnapshot;
+}
+
+function getHealthStatus(): HealthCheckResult {
+  const skillsLoaded = skills.length > 0;
+  const diagnostics = buildDiagnosticsSnapshot(skills);
+  
+  return {
+    status: skillsLoaded ? "healthy" : "degraded",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    version: "1.0.0",
+    services: {
+      api: true,
+      skills: skillsLoaded,
+    },
+    diagnostics,
+  };
+}
+
 Bun.serve({
   port: PORT,
-  idleTimeout: 255, // 10 minutes idle timeout for long-running tool executions
+  idleTimeout: 255,
   async fetch(req) {
-    if (req.method === "POST" && req.url.endsWith("/api/chat")) {
+    const url = new URL(req.url);
+
+    if (url.pathname === "/health" && req.method === "GET") {
+      const health = getHealthStatus();
+      return new Response(JSON.stringify(health, null, 2), {
+        status: health.status === "healthy" ? 200 : 503,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url.pathname === "/logs" && req.method === "GET") {
+      const level = url.searchParams.get("level") as LogLevel | null;
+      const logs = level ? logger.getLogs(level) : logger.getLogs();
+      return new Response(JSON.stringify(logs, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/chat") {
+      logger.info("Chat API request received", { path: url.pathname });
+      
       const body = (await req.json()) as { messages?: ChatMessage[] };
       const messages = body.messages || [];
 
@@ -163,7 +216,7 @@ Bun.serve({
         stopWhen: stepCountIs(20),
         abortSignal: req.signal,
         onAbort: ({ steps }) => {
-          console.log("Stream aborted after", steps.length, "steps");
+          logger.warn("Stream aborted", { stepsCount: steps.length });
         },
         providerOptions: {
           google: {
@@ -177,7 +230,7 @@ Bun.serve({
           },
         },
         onError: (error) => {
-          console.error("Error:", JSON.stringify(error, null, 2));
+          logger.error("Chat API error", { error: String(error) });
         },
       });
 
@@ -186,11 +239,12 @@ Bun.serve({
       });
     }
 
+    logger.warn("Not found", { path: url.pathname, method: req.method });
     return new Response("Not Found", { status: 404 });
   },
 });
 
-console.log(`Chat API server running on http://localhost:${PORT}`);
+logger.info(`Chat API server running on http://localhost:${PORT}`);
 const copyToClipboard = async (text: string) => {
   try {
     // Try clipboardy first (cross-platform clipboard library)
