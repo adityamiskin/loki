@@ -10,10 +10,8 @@ import { grep } from "./grep";
 import { buildSubAgentSystemPrompt } from "../src/prompts";
 import { loadSkills } from "../src/skills";
 import { subAgentProgress } from "./subagent-progress";
-import { logger } from "../src/utils/logger";
-import { createTypedError, ErrorCategory, ErrorCode } from "../src/utils/errors";
-import { withRetry, isTransientError } from "../src/utils/retry";
 
+// Sub-agent tools - can use the same tools as the main agent
 const subAgentTools = {
   shell,
   webSearch,
@@ -41,12 +39,10 @@ export const subAgent = tool({
       ),
   }),
   execute: async ({ objective, context = [] }) => {
-    logger.setModule("subagent");
-    logger.info("Starting sub-agent session", { objective, contextLength: context.length });
-
     const skills = loadSkills();
     const system = buildSubAgentSystemPrompt(skills);
 
+    // Create a unique session ID for this subagent run
     const sessionId = `subagent-${Date.now()}-${Math.random()
       .toString(36)
       .substring(2, 9)}`;
@@ -66,44 +62,41 @@ export const subAgent = tool({
       },
     ];
 
-    const maxToolRounds = 30;
+    const maxToolRounds = 30; // internal safety cap; sub-agent gets one more step to summarize
 
     try {
-      const streamResult = async () => {
-        return streamText({
-          model: openai("gpt-5.1"),
-          system,
-          messages,
-          tools: subAgentTools,
-          stopWhen: [
-            stepCountIs(maxToolRounds + 1),
-            ({ steps }) => steps.some((step) => (step.text?.length ?? 0) > 0),
-          ],
-          prepareStep: async ({ stepNumber }) => {
-            if (stepNumber >= maxToolRounds) {
-              return {
-                activeTools: [],
-              };
-            }
-            return {};
-          },
-        });
-      };
-
-      const result = await withRetry(streamResult, {
-        maxRetries: 2,
-        retryOn: isTransientError,
+      const result = streamText({
+        model: openai("gpt-5.1"),
+        system,
+        messages,
+        tools: subAgentTools,
+        // Stop when either: we reach the tool limit + final step, OR we already have a text answer.
+        stopWhen: [
+          stepCountIs(maxToolRounds + 1), // allow tool calls + 1 final response
+          ({ steps }) => steps.some((step) => (step.text?.length ?? 0) > 0), // stop once text is produced
+        ],
+        // Enforce a summary/answer step by turning off tools after maxSteps tool rounds.
+        prepareStep: async ({ stepNumber }) => {
+          if (stepNumber >= maxToolRounds) {
+            return {
+              activeTools: [], // disable further tool use; force model to answer
+            };
+          }
+          return {};
+        },
       });
 
+      // Collect all text and tool calls from the stream
       let toolCalls = 0;
       let finalText = "";
-      const actionIds: Map<string, string> = new Map();
+      const actionIds: Map<string, string> = new Map(); // Map tool call ID to action ID
 
       for await (const delta of result.fullStream) {
         if (delta.type === "text-delta") {
           finalText += delta.text;
         } else if (delta.type === "tool-call") {
           toolCalls++;
+          // Track the tool call in progress store
           const actionId = subAgentProgress.addAction(
             sessionId,
             delta.toolName,
@@ -113,6 +106,7 @@ export const subAgent = tool({
           );
           actionIds.set(delta.toolCallId, actionId);
         } else if (delta.type === "tool-result") {
+          // Mark the action as completed
           const actionId = actionIds.get(delta.toolCallId);
           if (actionId) {
             subAgentProgress.completeAction(sessionId, actionId);
@@ -120,8 +114,8 @@ export const subAgent = tool({
         }
       }
 
+      // Mark session as complete
       subAgentProgress.completeSession(sessionId);
-      logger.info("Sub-agent session completed", { sessionId, toolCalls });
 
       return {
         result: finalText.trim() || "(no output generated)",
@@ -129,34 +123,15 @@ export const subAgent = tool({
         completed: true,
         sessionId,
       };
-    } catch (error) {
-      const errorMessage = (error as Error).message;
-      logger.error("Sub-agent session error", { sessionId, error: errorMessage });
-      
-      subAgentProgress.completeSession(sessionId, errorMessage);
-      
-      const typedError = createTypedError(
-        errorMessage,
-        ErrorCategory.RUNTIME,
-        ErrorCode.INTERNAL_ERROR,
-        {
-          recoverable: isTransientError(error),
-          suggestions: [
-            "Try simplifying the objective",
-            "Break the task into smaller steps",
-            "Check if required resources are available",
-          ],
-        }
-      );
-
+    } catch (error: any) {
+      console.error("Sub-agent error:", error);
+      subAgentProgress.completeSession(sessionId, error.message);
       return {
-        result: `Error during sub-agent execution: ${errorMessage}`,
+        result: `Error during sub-agent execution: ${error.message}`,
         toolCalls: 0,
         completed: false,
-        error: errorMessage,
+        error: error.message,
         sessionId,
-        errorCategory: ErrorCategory.RUNTIME,
-        errorCode: ErrorCode.INTERNAL_ERROR,
       };
     }
   },
