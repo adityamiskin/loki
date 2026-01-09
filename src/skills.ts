@@ -190,7 +190,7 @@ export function formatSkillsSection(skills: SkillSummary[]): string {
     "- Only use skills listed in <available_skills> below",
     "- Do not invoke a skill that is already loaded in your context",
     "- Load skills proactively based on the user's task (e.g., if they ask about PDFs, load the 'pdf' skill)",
-    "- Users can also explicitly mention skills with $<skill-name> in their message, but you should load skills automatically when relevant",
+    "- Users can mention skills with $<skill-name> or #skill:<skill-name>; natural phrases such as 'pdf parser' are also matched automatically",
     "</usage>",
     "",
     "<available_skills>",

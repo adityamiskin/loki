@@ -116,6 +116,11 @@ describe("baseSystemPrompt", () => {
     expect(baseSystemPrompt).toContain("concise");
     expect(baseSystemPrompt).toContain("CLI display");
   });
+
+  it("should mention skill reference syntax", () => {
+    expect(baseSystemPrompt).toContain("# SKILL REFERENCES");
+    expect(baseSystemPrompt).toContain("#skill:skill-name");
+  });
 });
 
 describe("baseSubAgentSystemPrompt", () => {

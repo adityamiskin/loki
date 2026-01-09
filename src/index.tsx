@@ -34,59 +34,16 @@ import {
   buildDiagnosticsSnapshot,
   type DiagnosticsSnapshot,
 } from "./utils/diagnostics";
+import { buildSkillTriggers, matchSkillsInText } from "./skill-triggers";
 
 dotenv.config();
+
 
 type ChatMessage = UIMessage<AllTools>;
 
 const skills = loadSkills();
 const defaultSystemPrompt = buildSystemPrompt(skills);
 const skillTriggers = buildSkillTriggers(skills);
-
-const SKILL_REFERENCE_REGEX = /\$([A-Za-z0-9_-]+)/g;
-
-function buildSkillTriggers(
-  skills: SkillDefinition[]
-): Map<string, SkillDefinition> {
-  const map = new Map<string, SkillDefinition>();
-  for (const skill of skills) {
-    for (const key of deriveLookupKeys(skill.name)) {
-      if (!map.has(key)) {
-        map.set(key, skill);
-      }
-    }
-  }
-  return map;
-}
-
-function deriveLookupKeys(name: string): string[] {
-  const lower = name.toLowerCase();
-  const cleaned = lower.replace(/[^a-z0-9\s_-]+/g, " ").trim();
-  const set = new Set<string>();
-  const compact = cleaned.replace(/[\s_-]+/g, "");
-  if (compact) {
-    set.add(compact);
-  }
-  const dashy = cleaned.replace(/[\s_]+/g, "-").replace(/-+/g, "-");
-  if (dashy) {
-    set.add(dashy);
-  }
-  const underscored = cleaned.replace(/[\s-]+/g, "_").replace(/_+/g, "_");
-  if (underscored) {
-    set.add(underscored);
-  }
-  if (cleaned) {
-    set.add(cleaned.replace(/\s+/g, "-"));
-    set.add(cleaned.replace(/\s+/g, "_"));
-  }
-  if (!set.size) {
-    const fallback = lower.replace(/[^a-z0-9]+/g, "");
-    if (fallback) {
-      set.add(fallback);
-    }
-  }
-  return Array.from(set).filter(Boolean);
-}
 
 function flattenMessageText(message: ChatMessage): string {
   return message.parts
@@ -99,7 +56,7 @@ function collectTriggeredSkills(
   messages: ChatMessage[],
   triggers: Map<string, SkillDefinition>
 ): SkillDefinition[] {
-  const seen = new Set<SkillDefinition>();
+  const seen = new Map<string, SkillDefinition>();
   for (const message of messages) {
     if (message.role !== "user") {
       continue;
@@ -108,18 +65,11 @@ function collectTriggeredSkills(
     if (!text) {
       continue;
     }
-    for (const match of text.matchAll(SKILL_REFERENCE_REGEX)) {
-      const token = match[1]?.toLowerCase();
-      if (!token) {
-        continue;
-      }
-      const skill = triggers.get(token);
-      if (skill) {
-        seen.add(skill);
-      }
+    for (const skill of matchSkillsInText(text, triggers, skills)) {
+      seen.set(skill.filePath, skill);
     }
   }
-  return Array.from(seen);
+  return Array.from(seen.values());
 }
 
 function buildRuntimeSystemPrompt(

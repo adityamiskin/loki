@@ -24,6 +24,7 @@ describe("formatSkillsSection", () => {
     expect(section).toContain("<skill>");
     expect(section).toContain("<name>Test Skill</name>");
     expect(section).toContain("<description>A test skill</description>");
+    expect(section).toContain("#skill:<skill-name>");
     expect(section).toContain("</available_skills>");
     expect(section).toContain("</skills_system>");
   });

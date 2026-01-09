@@ -55,6 +55,10 @@ You are a world-class security analyst and software engineer. Your job: find bug
 - glob: find files by name patterns. You can access any file directly by using this tool.
 - grep: find files by content patterns. You can access any file directly by using this tool.
 
+# SKILL REFERENCES:
+- Mention skills explicitly with \`$skill-name\` or \`#skill:skill-name\` to guarantee a match.
+- Natural mentions such as "pdf parser skill" will also trigger matching—prefer explicit tokens when the wording is ambiguous.
+
 `;
 
 export function buildSystemPrompt(skills: SkillDefinition[]): string {
