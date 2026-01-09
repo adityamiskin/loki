@@ -1,8 +1,19 @@
 import { tool } from "ai";
 import { z } from "zod";
 import * as path from "path";
+import { createTypedError, ErrorCategory, ErrorCode } from "../src/utils/errors";
+import { withRetry, isTransientError } from "../src/utils/retry";
 
 const MAX_LINE_LENGTH = 2000;
+
+function validateRegexPattern(pattern: string): { valid: boolean; error?: string } {
+  try {
+    new RegExp(pattern);
+    return { valid: true };
+  } catch (e) {
+    return { valid: false, error: (e as Error).message };
+  }
+}
 
 export const grep = tool({
   description: `Fast content search tool that works with any codebase size.
@@ -37,103 +48,143 @@ Usage:
     glob,
     caseInsensitive = false,
   }) => {
-    const args = ["--line-number", "--with-filename"];
-
-    if (caseInsensitive) {
-      args.push("--ignore-case");
-    }
-
-    if (glob) {
-      args.push("--glob", glob);
-    }
-
-    args.push("--regexp", pattern);
-    args.push(searchPath);
-
-    const proc = Bun.spawn(["rg", ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const output = await new Response(proc.stdout).text();
-    const errorOutput = await new Response(proc.stderr).text();
-    const exitCode = await proc.exited;
-
-    // ripgrep exits with 1 when no matches found, which is not an error
-    if (exitCode !== 0 && exitCode !== 1) {
-      throw new Error(`Search failed: ${errorOutput}`);
-    }
-
-    if (!output.trim()) {
-      return {
-        matches: 0,
-        results: "No matches found",
-      };
-    }
-
-    const lines = output.trim().split("\n");
-    const matches = [];
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-
-      const colonIndex = line.indexOf(":");
-      if (colonIndex === -1) continue;
-
-      const secondColonIndex = line.indexOf(":", colonIndex + 1);
-      if (secondColonIndex === -1) continue;
-
-      const filePath = line.substring(0, colonIndex);
-      const lineNum = parseInt(
-        line.substring(colonIndex + 1, secondColonIndex),
-        10
-      );
-      const lineText = line.substring(secondColonIndex + 1);
-
-      if (isNaN(lineNum)) continue;
-
-      matches.push({
-        file: filePath,
-        line: lineNum,
-        text:
-          lineText.length > MAX_LINE_LENGTH
-            ? lineText.substring(0, MAX_LINE_LENGTH) + "..."
-            : lineText,
-      });
-    }
-
-    // Limit results to prevent overwhelming output
-    const limit = 50;
-    const truncated = matches.length > limit;
-    const finalMatches = truncated ? matches.slice(0, limit) : matches;
-
-    let result = `Found ${matches.length} matches`;
-    if (truncated) {
-      result += ` (showing first ${limit})`;
-    }
-    result += ":\n\n";
-
-    let currentFile = "";
-    for (const match of finalMatches) {
-      if (currentFile !== match.file) {
-        if (currentFile !== "") {
-          result += "\n";
+    const patternValidation = validateRegexPattern(pattern);
+    if (!patternValidation.valid) {
+      throw createTypedError(
+        `Invalid regex pattern: ${patternValidation.error}`,
+        ErrorCategory.VALIDATION,
+        ErrorCode.REGEX_ERROR,
+        {
+          recoverable: false,
+          suggestions: [
+            "Check regex syntax for missing closing brackets or escapes",
+            "Use a simpler pattern to test",
+            "Test the pattern in a regex tester first",
+          ],
         }
-        currentFile = match.file;
-        result += `${match.file}:\n`;
+      );
+    }
+
+    const searchWithRetry = async () => {
+      const args = ["--line-number", "--with-filename"];
+
+      if (caseInsensitive) {
+        args.push("--ignore-case");
       }
-      result += `  ${match.line}: ${match.text}\n`;
-    }
 
-    if (truncated) {
-      result +=
-        "\n(Results truncated. Use a more specific pattern or path for complete results.)\n";
-    }
+      if (glob) {
+        args.push("--glob", glob);
+      }
 
-    return {
-      matches: matches.length,
-      results: result.trim(),
-      truncated,
+      args.push("--regexp", pattern);
+      args.push(searchPath);
+
+      const proc = Bun.spawn(["rg", ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const output = await new Response(proc.stdout).text();
+      const errorOutput = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+
+      if (exitCode !== 0 && exitCode !== 1) {
+        throw new Error(`Search failed: ${errorOutput}`);
+      }
+
+      return { output, errorOutput, exitCode };
     };
+
+    try {
+      const { output, exitCode } = await withRetry(searchWithRetry, {
+        maxRetries: 2,
+        retryOn: isTransientError,
+      });
+
+      if (!output.trim()) {
+        return {
+          matches: 0,
+          results: "No matches found",
+        };
+      }
+
+      const lines = output.trim().split("\n");
+      const matches = [];
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        const colonIndex = line.indexOf(":");
+        if (colonIndex === -1) continue;
+
+        const secondColonIndex = line.indexOf(":", colonIndex + 1);
+        if (secondColonIndex === -1) continue;
+
+        const filePath = line.substring(0, colonIndex);
+        const lineNum = parseInt(
+          line.substring(colonIndex + 1, secondColonIndex),
+          10
+        );
+        const lineText = line.substring(secondColonIndex + 1);
+
+        if (isNaN(lineNum)) continue;
+
+        matches.push({
+          file: filePath,
+          line: lineNum,
+          text:
+            lineText.length > MAX_LINE_LENGTH
+              ? lineText.substring(0, MAX_LINE_LENGTH) + "..."
+              : lineText,
+        });
+      }
+
+      const limit = 50;
+      const truncated = matches.length > limit;
+      const finalMatches = truncated ? matches.slice(0, limit) : matches;
+
+      let result = `Found ${matches.length} matches`;
+      if (truncated) {
+        result += ` (showing first ${limit})`;
+      }
+      result += ":\n\n";
+
+      let currentFile = "";
+      for (const match of finalMatches) {
+        if (currentFile !== match.file) {
+          if (currentFile !== "") {
+            result += "\n";
+          }
+          currentFile = match.file;
+          result += `${match.file}:\n`;
+        }
+        result += `  ${match.line}: ${match.text}\n`;
+      }
+
+      if (truncated) {
+        result +=
+          "\n(Results truncated. Use a more specific pattern or path for complete results.)\n";
+      }
+
+      return {
+        matches: matches.length,
+        results: result.trim(),
+        truncated,
+      };
+    } catch (error) {
+      throw createTypedError(
+        `Grep search failed: ${(error as Error).message}`,
+        ErrorCategory.RUNTIME,
+        ErrorCode.INTERNAL_ERROR,
+        {
+          recoverable: isTransientError(error),
+          suggestions: [
+            "Try a simpler pattern",
+            "Verify the search path exists",
+            "Check if ripgrep is installed",
+          ],
+        }
+      );
+    }
   },
 });

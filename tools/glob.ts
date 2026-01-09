@@ -1,6 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 import * as path from "path";
+import { createTypedError, ErrorCategory, ErrorCode } from "../src/utils/errors";
+import { withRetry, isTransientError } from "../src/utils/retry";
 
 export const globFiles = tool({
   description: `Fast file pattern matching tool that works with any codebase size.
@@ -10,7 +12,7 @@ Usage:
 - Returns matching file paths sorted by modification time
 - Use this tool when you need to find files by name patterns
 - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the subAgent tool instead
-- You have the capability to call multiple tools in a single response. It is always better to speculatively perform multiple searches as a batch that are potentially useful`,
+- You have the capability to call multiple tools in a single response. It is always better to speculatively perform multiple searches as a batch that are most effective`,
   inputSchema: z.object({
     pattern: z
       .string()
@@ -25,12 +27,11 @@ Usage:
       ),
   }),
   execute: async ({ pattern, cwd = "." }) => {
-    try {
-      const searchPath = path.isAbsolute(cwd)
-        ? cwd
-        : path.resolve(process.cwd(), cwd);
+    const searchPath = path.isAbsolute(cwd)
+      ? cwd
+      : path.resolve(process.cwd(), cwd);
 
-      // Use ripgrep to find files matching the glob pattern
+    const searchWithRetry = async () => {
       const proc = Bun.spawn(["rg", "--files", "--glob", pattern], {
         cwd: searchPath,
         stdout: "pipe",
@@ -41,10 +42,18 @@ Usage:
       const errorOutput = await new Response(proc.stderr).text();
       const exitCode = await proc.exited;
 
-      // ripgrep exits with 1 when no files found, which is not an error
       if (exitCode !== 0 && exitCode !== 1) {
         throw new Error(`File search failed: ${errorOutput}`);
       }
+
+      return { output, exitCode };
+    };
+
+    try {
+      const { output } = await withRetry(searchWithRetry, {
+        maxRetries: 2,
+        retryOn: isTransientError,
+      });
 
       if (!output.trim()) {
         return {
@@ -59,7 +68,6 @@ Usage:
         .split("\n")
         .filter((line) => line.length > 0);
 
-      // Get file stats and sort by modification time (most recent first)
       const filesWithStats = await Promise.all(
         files.map(async (filePath) => {
           try {
@@ -80,7 +88,6 @@ Usage:
 
       filesWithStats.sort((a, b) => b.mtime - a.mtime);
 
-      // Limit results to prevent overwhelming output
       const limit = 50;
       const truncated = filesWithStats.length > limit;
       const finalFiles = truncated
@@ -107,7 +114,19 @@ Usage:
         truncated,
       };
     } catch (error) {
-      throw new Error(`Glob search failed: ${error}`);
+      throw createTypedError(
+        `Glob search failed: ${(error as Error).message}`,
+        ErrorCategory.FILESYSTEM,
+        ErrorCode.INTERNAL_ERROR,
+        {
+          recoverable: isTransientError(error),
+          suggestions: [
+            "Check if the search path exists",
+            "Verify the glob pattern is valid",
+            "Try a more specific pattern",
+          ],
+        }
+      );
     }
   },
 });
