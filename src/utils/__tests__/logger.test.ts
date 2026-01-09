@@ -76,4 +76,21 @@ describe("logger", () => {
     logger.clearLogs();
     expect(logger.getLogs()).toHaveLength(0);
   });
+
+  it("summarizes log levels and recency", () => {
+    logger.setLogLevel("debug");
+    logger.debug("debug entry");
+    logger.info("info entry");
+    logger.warn("warn entry");
+
+    const summary = logger.getSummary(2);
+    expect(summary.total).toBe(3);
+    expect(summary.byLevel.debug).toBe(1);
+    expect(summary.byLevel.info).toBe(1);
+    expect(summary.byLevel.warn).toBe(1);
+    expect(summary.recent).toHaveLength(2);
+    expect(summary.recent[0]?.message).toBe("info entry");
+    expect(summary.recent[1]?.message).toBe("warn entry");
+    expect(summary.lastTimestamp).toBeDefined();
+  });
 });

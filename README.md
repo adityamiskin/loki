@@ -113,6 +113,11 @@ This will:
 - Launch the TUI interface
 - Connect to Google Gemini Flash model
 
+### Health & Diagnostics
+
+- Query `GET /health` for a structured status payload that now includes log summaries, skill-loading insights, and helpful recovery notes.
+- Use `GET /logs?level=info` to stream recent log entries when debugging issues reported by the diagnostics block.
+
 ### Using the Interface
 
 - **Type your query**: Enter your security question, CTF challenge description, or analysis request
